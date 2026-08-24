@@ -6,8 +6,59 @@ declare(strict_types=1);
 const CAMVIEW_ROOT = __DIR__ . '/..';
 const STREAMS_FILE = CAMVIEW_ROOT . '/streams.json';
 const USERS_FILE   = CAMVIEW_ROOT . '/users.json';
+const SNAPSHOTS_DIR = CAMVIEW_ROOT . '/snapshots';
+const MAX_SNAPSHOTS = 500;  // oldest are pruned beyond this
 
 const NAME_RE = '/^[a-zA-Z0-9_-]+$/';
+const SNAPSHOT_RE = '/^[a-zA-Z0-9_-]+-\d{8}-\d{6}(-\d+)?\.jpg$/';
+
+// ---------- snapshots ----------
+
+function ensure_snapshots_dir(): void {
+    if (!is_dir(SNAPSHOTS_DIR) && !mkdir(SNAPSHOTS_DIR, 0775, true)) {
+        json_err('cannot create snapshots dir — check web server permissions', 500);
+    }
+    $ht = SNAPSHOTS_DIR . '/.htaccess';
+    if (!is_file($ht)) file_put_contents($ht, "Require all denied\n");
+}
+
+function snapshot_path(string $cam): string {
+    ensure_snapshots_dir();
+    $base = SNAPSHOTS_DIR . "/$cam-" . date('Ymd-His');
+    $path = "$base.jpg";
+    for ($i = 2; file_exists($path); $i++) $path = "$base-$i.jpg";
+    return $path;
+}
+
+function prune_snapshots(): void {
+    $files = glob(SNAPSHOTS_DIR . '/*.jpg') ?: [];
+    if (count($files) <= MAX_SNAPSHOTS) return;
+    usort($files, fn($a, $b) => filemtime($a) <=> filemtime($b));
+    foreach (array_slice($files, 0, count($files) - MAX_SNAPSHOTS) as $f) unlink($f);
+}
+
+function list_snapshots(): array {
+    ensure_snapshots_dir();
+    $out = [];
+    foreach (glob(SNAPSHOTS_DIR . '/*.jpg') ?: [] as $f) {
+        $base = basename($f);
+        $out[] = [
+            'file' => $base,
+            'cam' => preg_replace('/-\d{8}-\d{6}(-\d+)?\.jpg$/', '', $base),
+            'size' => filesize($f),
+            'mtime' => filemtime($f),
+        ];
+    }
+    usort($out, fn($a, $b) => $b['mtime'] <=> $a['mtime']);
+    return $out;
+}
+
+function valid_snapshot_file(string $f): string {
+    if (!preg_match(SNAPSHOT_RE, $f)) json_err('invalid file', 400);
+    $path = SNAPSHOTS_DIR . '/' . $f;
+    if (!is_file($path)) json_err('not found', 404);
+    return $path;
+}
 
 session_set_cookie_params([
     'httponly' => true,

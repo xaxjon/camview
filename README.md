@@ -20,7 +20,12 @@ user management and a camera config UI. No build step, no framework.
   passwords; protects the last admin.
 - **Live status dots** per camera (streaming / standby / disabled).
 - **Enable/disable** a camera without losing its config.
-- **Snapshot button** per tile — grabs a JPEG still on demand.
+- **Snapshots**: the 📷 button on a tile saves a JPEG on the server
+  (`snapshots/<cam>-<date>-<time>.jpg`). The **Snapshots page**
+  (`snapshots.html`) offers thumbnails, full view, single or bulk download
+  (`.tar.gz`), bulk delete, and a full purge. Oldest files are auto-pruned
+  beyond 500 snapshots. Delete/purge are admin-only; any user can take,
+  view and download snapshots.
 - Per-tile audio toggle (streams start muted so autoplay works).
 - Streams are pulled **on demand**: cameras are only connected while at
   least one viewer is watching; everything stops ~10s after the last
@@ -57,10 +62,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now mediamtx-viewer
 ```
 
 Deployment permissions: the web server user must be able to write
-`streams.json`, `mediamtx.yml` and `users.json` in the install dir:
+`streams.json`, `mediamtx.yml`, `users.json` and the `snapshots/` directory
+in the install dir:
 
 ```sh
-sudo chown www-data streams.json mediamtx.yml   # users.json is created by setup
+sudo chown www-data streams.json mediamtx.yml   # users.json and snapshots/ are created by the app
 ```
 
 Open `http://<host>/…/setup.html` once to create the first admin, then log
@@ -146,7 +152,11 @@ Requires `google-chrome` and the Python `websockets` package.
 - `index.html` — viewer grid (login required)
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)
-- `api/` — PHP backend (auth, CRUD, live test, snapshot, MediaMTX client)
+- `snapshots.html` — snapshot file management (view/download all users,
+  delete/purge admin only)
+- `api/` — PHP backend (auth, CRUD, live test, snapshots, MediaMTX client)
+- `snapshots/` — saved JPEGs, auto-created and git-ignored (direct web
+  access denied; files are served through the authenticated API)
 - `streams.json.example` — camera list template; copy to `streams.json`
   (git-ignored, contains credentials)
 - `gen-config.py` — generates `mediamtx.yml` from `streams.json`

@@ -104,6 +104,31 @@ async def main():
         print("== disable/enable via toggle ==")
         await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=toggle]').click()")
         await asyncio.sleep(2)
+
+        print("== snapshot from tile + snapshots page ==")
+        # re-enable first so the tile exists
+        await nav("admin.html")
+        await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=toggle]').click()")
+        await asyncio.sleep(2)
+        await nav("index.html")
+        await js("[...document.querySelectorAll('.tile')].find(t => t.dataset.name === 'testcam').querySelector('.snap').click()")
+        toast = None
+        for _ in range(20):
+            await asyncio.sleep(1)
+            toast = await js("document.querySelector('.tile[data-name=testcam] .toast')?.textContent || ''")
+            if toast:
+                break
+        check("tile snapshot saved with toast", isinstance(toast, str) and toast.startswith("saved testcam-"), toast)
+        await nav("snapshots.html")
+        await asyncio.sleep(2)
+        check("snapshots page lists the file", (await js(
+            "[...document.querySelectorAll('#grid .card b')].map(b => b.textContent)")) == ["testcam"])
+        check("purge button visible to admin", await js("!document.getElementById('purge').hidden"))
+
+        print("== disable hides camera from grid ==")
+        await nav("admin.html")
+        await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=toggle]').click()")
+        await asyncio.sleep(2)
         await nav("index.html")
         n2 = await js("document.querySelectorAll('.tile').length + ' @ ' + location.pathname")
         check("disabled camera hidden from viewer", n2 == "2 @ /index.html", n2)

@@ -67,7 +67,7 @@ EOF
 (cd "$WORK" && MTX_API=http://127.0.0.1:29997 php -S 127.0.0.1:8090 > /tmp/php.log 2>&1) & PIDS+=($!)
 sleep 3
 
-reset_state() { rm -f "$WORK/users.json"; cp streams.json.example "$WORK/streams.json"; }
+reset_state() { rm -rf "$WORK/snapshots"; rm -f "$WORK/users.json"; cp streams.json.example "$WORK/streams.json"; }
 
 reset_state
 python3 test_api.py || exit 1

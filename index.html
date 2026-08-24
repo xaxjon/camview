@@ -42,6 +42,11 @@
   .tile .mute { right: 6px; bottom: 6px; }
   .tile .snap { right: 40px; bottom: 6px; }
 
+  .tile .toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    padding: 4px 12px; background: rgba(20,80,30,.9); border-radius: 4px;
+    font-size: 12px; pointer-events: none; white-space: nowrap; }
+  .tile .toast.err { background: rgba(100,25,25,.9); }
+
   #empty { color: #888; }
 </style>
 </head>
@@ -49,6 +54,7 @@
   <div id="bar">
     <h1>Camview</h1>
     <span id="count"></span>
+    <a href="snapshots.html">Snapshots</a>
     <a href="admin.html" id="admin-link" hidden>⚙ Cameras</a>
     <a href="#" id="logout">Log out</a>
     <span class="hint">click = fullscreen &nbsp;·&nbsp; double-click = back to grid</span>
@@ -63,6 +69,7 @@
 const grid  = document.getElementById('grid');
 const count = document.getElementById('count');
 const peers = new Map();   // name -> RTCPeerConnection
+let CSRF = '';
 
 // ---------- layout ----------
 
@@ -183,10 +190,23 @@ function makeTile(stream) {
   const snap = document.createElement('button');
   snap.className = 'btn snap';
   snap.textContent = '📷';
-  snap.title = 'Snapshot (opens JPEG)';
-  snap.addEventListener('click', e => {
+  snap.title = 'Save snapshot on server';
+  snap.addEventListener('click', async e => {
     e.stopPropagation();
-    window.open(`api/snapshot.php?name=${encodeURIComponent(stream.name)}`, '_blank');
+    snap.textContent = '⏳';
+    try {
+      const res = await fetch('api/snapshot.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+        body: JSON.stringify({ name: stream.name }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || 'failed');
+      toast(tile, `saved ${j.file}`);
+    } catch (err) {
+      toast(tile, err.message, true);
+    }
+    snap.textContent = '📷';
   });
   snap.addEventListener('dblclick', e => e.stopPropagation());
 
@@ -202,6 +222,15 @@ function makeTile(stream) {
 
   grid.appendChild(tile);
   runStream(stream.name, video, status);
+}
+
+function toast(tile, msg, isErr) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  if (isErr) t.classList.add('err');
+  tile.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
 }
 
 // refresh status dots from the API (cameras come and go)
@@ -225,6 +254,7 @@ async function init() {
   }
   if (me.setup_needed) { location = 'setup.html'; return; }
   if (!me.user) { location = 'login.html'; return; }
+  CSRF = me.csrf;
   if (me.user.role === 'admin') document.getElementById('admin-link').hidden = false;
 
   document.getElementById('logout').addEventListener('click', async e => {

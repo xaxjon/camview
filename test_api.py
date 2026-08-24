@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """API-level test for camview backend (setup, auth, CRUD, test, snapshot, users)."""
 import json
+import re
 import urllib.request
 import http.cookiejar
 
@@ -77,11 +78,29 @@ check("AAC hint present", j.get("audio", "").startswith("aac") and "transcode" i
 s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/nope"}, csrf)
 check("dead URL reported cleanly", s == 200 and j.get("ok") is False, j)
 
-print("== snapshot ==")
-s, data = api("snapshot.php?name=testcam", raw=True)
-check("snapshot returns JPEG", s == 200 and data[:2] == b"\xff\xd8", (s, data[:20]))
-s, j = api("snapshot.php?name=ghost")
+print("== snapshots: save, list, serve, archive, delete, purge ==")
+s, j = api("snapshot.php", "POST", {"name": "testcam"}, csrf)
+check("save snapshot", s == 200 and j.get("ok") and re.match(r'^testcam-\d{8}-\d{6}(-\d+)?\.jpg$', j.get("file", "")), j)
+snap1 = j.get("file")
+s, j = api("snapshot.php", "POST", {"name": "ghost"}, csrf)
 check("snapshot unknown cam 404", s == 404)
+s, j = api("snapshots.php")
+row = next((f for f in j.get("files", []) if f["file"] == snap1), None)
+check("snapshot listed with cam name", row and row["cam"] == "testcam" and row["size"] > 1000, j)
+s, data = api(f"snapshots.php?file={snap1}", raw=True)
+check("serve snapshot JPEG", s == 200 and data[:2] == b"\xff\xd8", s)
+s, j = api("snapshots.php?file=..%2fstreams.json")
+check("path traversal rejected", s in (400, 404), s)
+s, data = api("snapshots.php?action=archive", "POST", {"files": [snap1]}, csrf, raw=True)
+check("archive is gzip", s == 200 and data[:2] == b"\x1f\x8b", (s, data[:10]))
+s, j = api("snapshots.php", "DELETE", {"files": [snap1]}, csrf)
+check("bulk delete", s == 200 and j.get("deleted") == 1, j)
+s, j = api("snapshot.php", "POST", {"name": "testcam"}, csrf)
+api("snapshot.php", "POST", {"name": "testcam"}, csrf)
+s, j = api("snapshots.php", "DELETE", {"all": True}, csrf)
+check("purge all", s == 200 and j.get("deleted") == 2, j)
+s, j = api("snapshots.php")
+check("list empty after purge", j.get("files") == [], j)
 
 print("== disable / enable / delete ==")
 s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "enabled": False}, csrf)
@@ -108,8 +127,10 @@ s, j = api("cameras.php", "POST", {"name": "x", "source": "rtsp://x"}, vcsrf)
 check("viewer cannot add camera (403)", s == 403)
 s, j = api("users.php")
 check("viewer cannot list users (403)", s == 403)
-s, data = api("snapshot.php?name=testcam", raw=True)
-check("viewer can snapshot", s == 200 and data[:2] == b"\xff\xd8")
+s, data = api("snapshot.php", "POST", {"name": "testcam"}, vcsrf, raw=True)
+check("viewer can snapshot", s == 200, s)
+s, j = api("snapshots.php", "DELETE", {"all": True}, vcsrf)
+check("viewer cannot purge (403)", s == 403)
 api("logout.php", "POST")
 s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
 api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))

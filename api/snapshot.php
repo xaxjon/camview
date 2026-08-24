@@ -2,11 +2,12 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
-// One JPEG frame from a configured camera. Source is read server-side;
-// clients can only snapshot configured cameras, never arbitrary URLs.
-require_login();
+// Save one JPEG frame from a configured camera into snapshots/.
+// Source is read server-side; clients can only snapshot configured cameras.
+$u = require_login();
+check_csrf();
 
-$name = (string) ($_GET['name'] ?? '');
+$name = (string) (body()['name'] ?? '');
 $cam = null;
 foreach (load_cameras() as $c) {
     if ($c['name'] === $name && $c['enabled']) { $cam = $c; break; }
@@ -23,6 +24,10 @@ $jpeg = shell_exec($cmd);
 
 if (!$jpeg || strlen($jpeg) < 1000) json_err('could not grab a frame (camera offline?)', 502);
 
-header('Content-Type: image/jpeg');
-header('Content-Length: ' . strlen($jpeg));
-echo $jpeg;
+$path = snapshot_path($cam['name']);
+if (file_put_contents($path, $jpeg) === false) {
+    json_err('cannot write snapshot — check web server permissions', 500);
+}
+prune_snapshots();
+
+json_out(['ok' => true, 'file' => basename($path)]);

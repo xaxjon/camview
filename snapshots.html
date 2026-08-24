@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camview — snapshots</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  #bar { height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  #bar h1 { font-size: 15px; }
+  #bar a { color: #8ab4ff; text-decoration: none; }
+  #bar .spacer { margin-left: auto; }
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  #toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 16px; color: #999; }
+  button { padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer;
+    background: #2d6cdf; color: #fff; }
+  button.ghost { background: #2a2a2a; color: #ccc; }
+  button.danger { background: #662222; }
+  button:hover { filter: brightness(1.2); }
+  button:disabled { opacity: .4; cursor: default; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px; }
+  .card { position: relative; background: #1b1b1b; border: 1px solid #2a2a2a;
+    border-radius: 6px; overflow: hidden; }
+  .card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block;
+    cursor: pointer; background: #000; }
+  .card .meta { padding: 6px 8px; font-size: 12px; color: #999; display: flex;
+    justify-content: space-between; gap: 6px; }
+  .card .meta b { color: #ccc; font-weight: 600; }
+  .card input[type=checkbox] { position: absolute; top: 8px; left: 8px; width: 18px;
+    height: 18px; accent-color: #2d6cdf; }
+  .card.selected { outline: 2px solid #2d6cdf; }
+  #empty { color: #888; }
+  #err { color: #ff6b6b; min-height: 18px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>Camview — snapshots</h1>
+    <a href="index.html">Viewer</a>
+    <a href="admin.html" class="admin-only" hidden>Cameras</a>
+    <a href="users.html" class="admin-only" hidden>Users</a>
+    <span class="spacer"></span>
+    <span id="who"></span>
+    <a href="#" id="logout">Log out</a>
+  </div>
+  <main>
+    <div id="toolbar">
+      <label><input type="checkbox" id="select-all"> select all</label>
+      <span id="sel-count">0 selected</span>
+      <button class="ghost" id="download" disabled>Download selected (.tar.gz)</button>
+      <button class="danger admin-only" id="delete" hidden disabled>Delete selected</button>
+      <button class="danger admin-only" id="purge" hidden>Delete ALL snapshots</button>
+      <span class="spacer"></span>
+      <span id="stats"></span>
+    </div>
+    <div id="grid"></div>
+    <p id="empty" hidden>No snapshots yet — use the 📷 button on a camera tile.</p>
+    <div id="err"></div>
+  </main>
+
+<script>
+'use strict';
+let CSRF = '';
+const selected = new Set();
+
+async function api(path, method = 'GET', data) {
+  const res = await fetch('api/' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  if (res.status === 401) { location = 'login.html'; throw new Error('auth'); }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || `HTTP ${res.status}`);
+  }
+  return res;
+}
+
+const fmtSize = n => n > 1e6 ? (n/1e6).toFixed(1) + ' MB' : Math.round(n/1e3) + ' kB';
+const fail = e => { document.getElementById('err').textContent = e.message; };
+
+async function refresh() {
+  const data = await (await api('snapshots.php')).json();
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  selected.clear();
+  updateSelUI();
+  document.getElementById('empty').hidden = data.files.length > 0;
+  document.getElementById('stats').textContent =
+    `${data.files.length} snapshot${data.files.length === 1 ? '' : 's'}, ${fmtSize(data.total_size)}`;
+  for (const f of data.files) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const url = `api/snapshots.php?file=${encodeURIComponent(f.file)}`;
+    card.innerHTML = `
+      <input type="checkbox">
+      <img loading="lazy" src="${url}" alt="">
+      <div class="meta"><b></b><span></span></div>`;
+    card.querySelector('b').textContent = f.cam;
+    card.querySelector('.meta span').textContent =
+      `${new Date(f.mtime * 1000).toLocaleString()} · ${fmtSize(f.size)}`;
+    card.querySelector('img').addEventListener('click', () => window.open(url, '_blank'));
+    card.querySelector('input').addEventListener('change', e => {
+      e.target.checked ? selected.add(f.file) : selected.delete(f.file);
+      card.classList.toggle('selected', e.target.checked);
+      updateSelUI();
+    });
+    grid.appendChild(card);
+  }
+}
+
+function updateSelUI() {
+  document.getElementById('sel-count').textContent = `${selected.size} selected`;
+  document.getElementById('download').disabled = !selected.size;
+  document.getElementById('delete').disabled = !selected.size;
+}
+
+document.getElementById('select-all').addEventListener('change', e => {
+  document.querySelectorAll('#grid .card').forEach(card => {
+    const cb = card.querySelector('input');
+    cb.checked = e.target.checked;
+    cb.dispatchEvent(new Event('change'));
+  });
+});
+
+document.getElementById('download').addEventListener('click', async () => {
+  const res = await api('snapshots.php?action=archive', 'POST', { files: [...selected] });
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'snapshots.tar.gz';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('delete').addEventListener('click', () => {
+  if (!confirm(`Delete ${selected.size} snapshot(s)?`)) return;
+  api('snapshots.php', 'DELETE', { files: [...selected] }).then(refresh, fail);
+});
+
+document.getElementById('purge').addEventListener('click', () => {
+  if (!confirm('Delete ALL snapshots? This cannot be undone.')) return;
+  if (!confirm('Really purge every snapshot on the server?')) return;
+  api('snapshots.php', 'DELETE', { all: true }).then(refresh, fail);
+});
+
+document.getElementById('logout').addEventListener('click', async e => {
+  e.preventDefault();
+  await api('logout.php', 'POST');
+  location = 'login.html';
+});
+
+(async () => {
+  const me = await (await fetch('api/me.php')).json();
+  if (me.setup_needed) { location = 'setup.html'; return; }
+  if (!me.user) { location = 'login.html'; return; }
+  CSRF = me.csrf;
+  if (me.user.role === 'admin') {
+    document.querySelectorAll('.admin-only').forEach(el => el.hidden = false);
+  }
+  document.getElementById('who').textContent = me.user.username;
+  refresh().catch(fail);
+})();
+</script>
+</body>
+</html>
