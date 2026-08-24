@@ -31,3 +31,6 @@ else
 fi
 
 echo "done: $DEST/mediamtx and $DEST/ffmpeg ready"
+
+# never let the web server serve the binaries directory
+printf 'Require all denied\n' > "$DEST/.htaccess"

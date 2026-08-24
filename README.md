@@ -1,137 +1,139 @@
-# RTSP Viewer
+# Camview
 
-A simple multi-camera RTSP grid viewer for the browser. MediaMTX pulls the
-RTSP streams and re-serves them over WebRTC (sub-second latency); a single
-vanilla-JS page renders them in an auto-sizing grid.
+A multi-camera RTSP grid viewer for the browser. MediaMTX pulls the RTSP
+streams and re-serves them over WebRTC (sub-second latency); a vanilla-JS
+frontend renders an auto-sizing grid, and a small PHP API provides login,
+user management and a camera config UI. No build step, no framework.
+
+## Features
 
 - Grid picks the column count that maximizes tile size (16:9 tiles) so all
-  streams fit the viewport without scrolling. Recomputed on resize.
-- **Single click** a tile → fullscreen. **Double click** → back to grid
-  (Esc also exits fullscreen).
+  cameras fit the viewport without scrolling. Recomputed on resize.
+- **Single click** a tile → fullscreen. **Double click** → back to grid.
+- **Login with roles**: `admin` (manage cameras + users) and `viewer`
+  (watch only). First-run `setup.html` creates the initial admin.
+- **Camera config UI** (`admin.html`): add/edit/delete cameras with a
+  **live connection test** (probes the RTSP URL, reports video/audio
+  codecs, and warns when audio needs transcoding). Changes apply to the
+  running MediaMTX instantly — no service restart.
+- **User management** (`users.html`): create users, set roles, reset
+  passwords; protects the last admin.
+- **Live status dots** per camera (streaming / standby / disabled).
+- **Enable/disable** a camera without losing its config.
+- **Snapshot button** per tile — grabs a JPEG still on demand.
 - Per-tile audio toggle (streams start muted so autoplay works).
-- Offline streams show a status overlay and retry every 3 seconds.
 - Streams are pulled **on demand**: cameras are only connected while at
-  least one viewer is watching, and disconnected ~10s after the last
+  least one viewer is watching; everything stops ~10s after the last
   viewer leaves.
+
+## Requirements
+
+- Linux x86_64 or aarch64
+- **PHP 8+** with curl (for the login/config backend) and a web server
+  (Apache, or `php -S` for a quick look)
+- **python3** (runs `gen-config.py` to regenerate the MediaMTX config)
+- MediaMTX + ffmpeg binaries: not in the repo — run `./setup.sh` once
 
 ## Setup
 
-**Prerequisite:** the MediaMTX and ffmpeg binaries are **not** in the git
-repo. Fetch them once after cloning (into `bin/`, Linux x86_64/aarch64):
-
 ```sh
-./setup.sh
+./setup.sh                          # downloads bin/mediamtx + bin/ffmpeg
+cp streams.json.example streams.json
 ```
 
-1. Create your camera list from the example and edit it (`streams.json`
-   contains credentials and is git-ignored — never commit it):
+Then either run manually:
 
-   ```sh
-   cp streams.json.example streams.json
-   ```
+```sh
+./start.sh                          # MediaMTX + viewer on :8080 (no PHP features)
+```
 
-   ```json
-   [
-     "string entries like this one are comments — both the viewer and gen-config.py skip them",
-     { "name": "front-door", "source": "rtsp://user:pass@192.168.1.10:554/stream1" },
-     { "name": "driveway",   "source": "rtsp://user:pass@192.168.1.11:554/stream1" }
-   ]
-   ```
-
-   Names become MediaMTX path names: letters, digits, `-`, `_` only.
-   (JSON has no real comment syntax; plain string entries are the
-   convention here — keep them valid JSON strings.)
-
-2. Run:
-
-   ```sh
-   ./start.sh          # serves the viewer on port 8080 (override with PORT=xxxx)
-   ```
-
-3. Open `http://<host>:8080/` in a browser.
-
-`start.sh` regenerates `mediamtx.yml` from `streams.json` (via
-`gen-config.py`), starts MediaMTX, and starts a static web server for the
-viewer page. Ctrl-C stops both. If the directory is served by a web server
-already (e.g. Apache under `/var/www/html`), only the MediaMTX half is
-needed — the viewer page is purely static.
-
-## Running permanently (recommended)
-
-Don't tie MediaMTX's lifetime to page loads — a browser cannot reliably
-signal "tab closed" (crashes, network drops), so page-driven start/stop is
-fragile. Instead, run MediaMTX as a service and let its on-demand features
-do the work: an idle MediaMTX uses ~10 MB of RAM and pulls **no** camera
-traffic until someone opens the viewer; streams (and any transcode
-processes) stop automatically seconds after the last viewer leaves.
+…or, for the full experience (login, config UI), serve the directory with
+Apache + PHP and run MediaMTX as a service:
 
 ```sh
 sudo cp mediamtx-viewer.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx-viewer
+# adjust ExecStart paths in the unit to your install directory
+sudo systemctl daemon-reload && sudo systemctl enable --now mediamtx-viewer
 ```
 
-After editing `streams.json`: `sudo python3 gen-config.py && sudo systemctl
-restart mediamtx-viewer`.
+Deployment permissions: the web server user must be able to write
+`streams.json`, `mediamtx.yml` and `users.json` in the install dir:
+
+```sh
+sudo chown www-data streams.json mediamtx.yml   # users.json is created by setup
+```
+
+Open `http://<host>/…/setup.html` once to create the first admin, then log
+in. The viewer grid is `index.html`; admins also get **Cameras** and
+**Users** pages.
 
 ## Sound
 
-WebRTC audio only supports **Opus** and **G.711 (PCMU/PCMA)**. If a tile is
-silent even after clicking its 🔊 button:
+WebRTC audio only supports **Opus** and **G.711 (PCMU/PCMA)**. The
+config UI's *Test connection* button tells you what the camera sends:
 
-- Check the camera's audio codec: `bin/ffmpeg -i rtsp://... -t 1 -f null -`
-  and look at the `Audio:` line.
-- If it says `pcm_mulaw`/`pcm_alaw` — audio should already work.
-- If it says `aac`, MediaMTX **skips** that track for WebRTC (you'll see
-  `skipping track (MPEG-4 Audio)` in its log). Two fixes:
-  1. Preferred: switch the camera's audio codec to G.711 in its own web
-     interface (most IP cameras offer this).
-  2. Or set `"transcode_audio": true` on the stream in `streams.json`:
+- `pcm_mulaw`/`pcm_alaw` — audio works as-is.
+- `aac` — MediaMTX cannot serve it over WebRTC. Either switch the camera
+  to G.711 in its own web interface, or tick **Transcode audio** on the
+  camera (an on-demand ffmpeg copies video, transcodes audio to Opus).
 
-     ```json
-     { "name": "cam2", "source": "rtsp://...", "transcode_audio": true }
-     ```
+Tiles start muted (browser autoplay rules) — click the 🔊 button.
 
-     MediaMTX then starts an ffmpeg process on demand that copies the video
-     untouched and transcodes the audio to Opus. One ffmpeg per actively
-     watched stream; stopped when nobody watches.
+## Security notes
+
+- `streams.json` / `users.json` / `mediamtx.yml` contain credentials and
+  are git-ignored **and** denied by the shipped `.htaccess` (needs
+  `AllowOverride` on Apache). Camera source URLs are never sent to
+  non-admin browsers; snapshots and the grid use server-side lookups.
+- The MediaMTX WebRTC port (TCP 8889 + UDP 8189) is unauthenticated by
+  design — firewall it to trusted networks.
+- Use HTTPS in front of Apache if logins cross untrusted links.
+
+## Headless / no-PHP mode
+
+`streams.json` remains the canonical camera list. Without PHP you can still
+edit it by hand and run `sudo python3 gen-config.py && sudo systemctl
+restart mediamtx-viewer` — the UI simply isn't available. Plain string
+entries in the array act as comments.
 
 ## How it works
 
-- `gen-config.py` turns `streams.json` into a `mediamtx.yml`. Plain streams
-  get `source: <rtsp url>` + `sourceOnDemand` (pull only while watched);
-  `transcode_audio` streams get a `runOnDemand` ffmpeg publisher instead.
-- The viewer page fetches `streams.json`, builds one tile per stream, and
-  plays each via WHEP (`http://<host>:8889/<name>/whep`) with a recvonly
-  `RTCPeerConnection`.
-- Firewall: the browser needs TCP 8080 (page, or 80/443 via Apache),
-  TCP 8889 (WHEP handshake), and UDP 8189 (WebRTC media) to the host.
+- `gen-config.py` turns `streams.json` into `mediamtx.yml`
+  (`sourceOnDemand` pull paths, or `runOnDemand` ffmpeg transcode paths).
+- The PHP API (`api/`) handles auth (PHP sessions + bcrypt in
+  `users.json`), camera CRUD, and live-applies path changes through the
+  MediaMTX control API — no restarts needed for camera edits.
+- The viewer plays each camera via WHEP
+  (`http://<host>:8889/<name>/whep`) with a recvonly `RTCPeerConnection`.
+- Browser needs TCP 80/443 (or 8080), TCP 8889 (WHEP) and UDP 8189
+  (WebRTC media) to the host.
 
 ## Testing
 
-`test_e2e.py` drives headless Chrome over CDP and verifies real WebRTC
-playback plus the fullscreen toggles. It needs a live `test` stream:
-
 ```sh
-./bin/mediamtx test-mediamtx.yml &                       # publishable 'test' path
-./bin/ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=25 \
-  -f lavfi -i sine=frequency=440 \
-  -c:v libx264 -preset ultrafast -c:a aac \
-  -f rtsp rtsp://127.0.0.1:8554/test &
-python3 test_e2e.py                                      # prints RESULT: PASS
+./run-tests.sh
 ```
+
+spins up a scratch environment (two MediaMTX instances on alternate ports,
+a fake AAC test camera, the app under `php -S`) and runs:
+
+- `test_api.py` — 30 API checks: setup, login, CSRF, validation, CRUD with
+  live MediaMTX apply, probe/snapshot, roles.
+- `test_ui.py` — 13 headless-Chrome checks: first-run flow, login, grid,
+  admin add-camera with live test, disable toggle, logout gating.
 
 Requires `google-chrome` and the Python `websockets` package.
 
 ## Files
 
-- `streams.json.example` — template for your camera list; copy to
-  `streams.json` (git-ignored, the only file you edit)
-- `index.html` — the viewer (grid layout, WHEP playback, fullscreen)
+- `index.html` — viewer grid (login required)
+- `login.html`, `setup.html` — auth and first-run admin creation
+- `admin.html`, `users.html` — camera and user management (admin only)
+- `api/` — PHP backend (auth, CRUD, live test, snapshot, MediaMTX client)
+- `streams.json.example` — camera list template; copy to `streams.json`
+  (git-ignored, contains credentials)
 - `gen-config.py` — generates `mediamtx.yml` from `streams.json`
 - `setup.sh` — downloads the MediaMTX + ffmpeg binaries into `bin/`
-- `start.sh` — runs MediaMTX + web server (manual use)
+- `start.sh` — manual run (MediaMTX + static viewer, no PHP)
 - `mediamtx-viewer.service` — systemd unit for permanent operation
-- `test_e2e.py`, `test-mediamtx.yml` — end-to-end test
-- `bin/` — created by `setup.sh` (ffmpeg is needed for `transcode_audio`
-  and the tests)
+- `run-tests.sh`, `test_api.py`, `test_ui.py` — test suite

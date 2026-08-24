@@ -10,6 +10,14 @@ Each stream:
     an ffmpeg process is started on demand (runOnDemand) that copies the
     video and transcodes the audio to Opus, which browsers can play over
     WebRTC. Needed for cameras that only offer AAC audio.
+
+  { "name": "cam1", "source": "rtsp://...", "enabled": false }
+    kept in the file but not configured in MediaMTX (disabled camera).
+
+String entries in the array are comments and skipped.
+
+--paths-json: also print the path configurations as JSON on stdout
+(used by api/ to live-apply changes through the MediaMTX API).
 """
 import json
 import re
@@ -52,6 +60,7 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def main():
+    paths_json = "--paths-json" in sys.argv
     try:
         streams = json.loads((ROOT / "streams.json").read_text())
     except FileNotFoundError:
@@ -62,12 +71,15 @@ def main():
         sys.exit("streams.json is empty — add at least one stream")
 
     lines = []
+    confs = {}
     seen = set()
     for i, s in enumerate(streams, 1):
         if isinstance(s, str):
             continue  # string entries are comments
         if not isinstance(s, dict) or "name" not in s or "source" not in s:
             sys.exit(f"entry #{i}: every stream needs both \"name\" and \"source\" keys")
+        if s.get("enabled") is False:
+            continue  # disabled camera
         name, source = s["name"], s["source"]
         if not NAME_RE.match(name):
             sys.exit(f"invalid stream name {name!r} (use letters, digits, -, _)")
@@ -87,12 +99,22 @@ def main():
                 f"    runOnDemandRestart: yes\n"
                 f"    runOnDemandCloseAfter: 10s"
             )
+            confs[name] = {
+                "runOnDemand": cmd,
+                "runOnDemandRestart": True,
+                "runOnDemandCloseAfter": "10s",
+            }
         else:
             # sourceOnDemand: pull the camera only while a viewer is connected
             lines.append(f"  {name}:\n    source: {source}\n    sourceOnDemand: yes")
+            confs[name] = {"source": source, "sourceOnDemand": True}
 
     (ROOT / "mediamtx.yml").write_text(TEMPLATE.format(paths="\n".join(lines)))
-    print(f"mediamtx.yml written with {len(lines)} stream(s)")
+    if paths_json:
+        print(json.dumps(confs))
+        print(f"mediamtx.yml written with {len(lines)} stream(s)", file=sys.stderr)
+    else:
+        print(f"mediamtx.yml written with {len(lines)} stream(s)")
 
 
 if __name__ == "__main__":

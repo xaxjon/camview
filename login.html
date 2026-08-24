@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camview — login</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  .card { width: 300px; padding: 24px; background: #1b1b1b; border: 1px solid #2a2a2a;
+    border-radius: 8px; }
+  h1 { font-size: 18px; margin-bottom: 16px; }
+  input { width: 100%; padding: 8px; margin-bottom: 10px; background: #111;
+    border: 1px solid #333; border-radius: 4px; color: #ddd; }
+  button { width: 100%; padding: 9px; border: none; border-radius: 4px; cursor: pointer;
+    background: #2d6cdf; color: #fff; font-weight: 600; }
+  button:hover { background: #3b7bef; }
+  .err { color: #ff6b6b; margin-bottom: 10px; min-height: 18px; }
+</style>
+</head>
+<body>
+  <form class="card" id="form">
+    <h1>Camview</h1>
+    <div class="err" id="err"></div>
+    <input id="username" placeholder="Username" autocomplete="username" required autofocus>
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button>Sign in</button>
+  </form>
+
+<script>
+fetch('api/me.php').then(r => r.json()).then(me => {
+  if (me.setup_needed) location = 'setup.html';
+  else if (me.user) location = 'index.html';
+});
+
+document.getElementById('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const err = document.getElementById('err');
+  err.textContent = '';
+  const res = await fetch('api/login.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value,
+    }),
+  });
+  if (res.ok) location = 'index.html';
+  else err.textContent = (await res.json()).error || 'login failed';
+});
+</script>
+</body>
+</html>

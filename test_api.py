@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""API-level test for camview backend (setup, auth, CRUD, test, snapshot, users)."""
+import json
+import urllib.request
+import http.cookiejar
+
+BASE = "http://127.0.0.1:8090/api"
+MTX = "http://127.0.0.1:29997"
+
+cj = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+passed = failed = 0
+
+def check(name, cond, extra=""):
+    global passed, failed
+    if cond: passed += 1; print(f"  ok   {name}")
+    else: failed += 1; print(f"  FAIL {name} {extra}")
+
+def api(path, method="GET", data=None, csrf=None, raw=False):
+    req = urllib.request.Request(f"{BASE}/{path}", method=method)
+    body = None
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+        body = json.dumps(data).encode()
+    if csrf:
+        req.add_header("X-CSRF-Token", csrf)
+    try:
+        with opener.open(req, body) as r:
+            return r.status, (r.read() if raw else json.loads(r.read()))
+    except urllib.error.HTTPError as e:
+        payload = e.read()
+        if raw: return e.code, payload
+        try: return e.code, json.loads(payload)
+        except json.JSONDecodeError: return e.code, {}
+
+def mtx_paths():
+    with urllib.request.urlopen(f"{MTX}/v3/paths/list") as r:
+        return {i["name"]: i["ready"] for i in json.loads(r.read())["items"]}
+
+print("== first-run setup ==")
+s, j = api("me.php"); check("setup_needed on fresh install", s == 200 and j["setup_needed"] is True)
+s, j = api("cameras.php"); check("cameras requires login (401)", s == 401)
+s, j = api("setup.php", "POST", {"username": "admin", "password": "adminpass1"})
+check("create first admin", s == 200, j)
+s, j = api("setup.php", "POST", {"username": "x", "password": "whatever1"})
+check("setup refuses once users exist", s == 403)
+
+print("== login ==")
+s, j = api("login.php", "POST", {"username": "admin", "password": "wrong"})
+check("wrong password rejected", s == 401)
+s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
+check("admin login", s == 200 and j["role"] == "admin")
+csrf = j.get("csrf")
+check("csrf token issued", bool(csrf))
+
+print("== camera CRUD + live apply ==")
+cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True}
+s, j = api("cameras.php", "POST", cam); check("add without CSRF rejected", s == 403)
+s, j = api("cameras.php", "POST", cam, csrf)
+check("add camera", s == 200, j)
+check("path live in mediamtx", "testcam" in mtx_paths())
+s, j = api("cameras.php", "POST", cam, csrf); check("duplicate name rejected", s == 409)
+s, j = api("cameras.php", "POST", {"name": "bad name!", "source": "rtsp://x"}, csrf)
+check("invalid name rejected", s == 400)
+s, j = api("cameras.php", "POST", {"name": "ok", "source": "http://x"}, csrf)
+check("non-rtsp source rejected", s == 400)
+
+s, j = api("cameras.php")
+row = next((c for c in j if c["name"] == "testcam"), {})
+check("admin sees source + status", row.get("source", "").startswith("rtsp://") and "status" in row, row)
+
+print("== camera test endpoint ==")
+s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/test"}, csrf)
+check("probe reports H264", s == 200 and j.get("ok") and "H264" in j.get("video", ""), j)
+check("AAC hint present", j.get("audio", "").startswith("aac") and "transcode" in (j.get("hint") or ""), j)
+s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/nope"}, csrf)
+check("dead URL reported cleanly", s == 200 and j.get("ok") is False, j)
+
+print("== snapshot ==")
+s, data = api("snapshot.php?name=testcam", raw=True)
+check("snapshot returns JPEG", s == 200 and data[:2] == b"\xff\xd8", (s, data[:20]))
+s, j = api("snapshot.php?name=ghost")
+check("snapshot unknown cam 404", s == 404)
+
+print("== disable / enable / delete ==")
+s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "enabled": False}, csrf)
+check("disable camera", s == 200, j)
+check("disabled path removed from mediamtx", "testcam" not in mtx_paths())
+s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "enabled": True}, csrf)
+check("enable camera", s == 200 and "testcam" in mtx_paths(), j)
+s, j = api("cameras.php", "DELETE", {"name": "testcam"}, csrf)
+check("delete camera", s == 200 and "testcam" not in mtx_paths(), j)
+
+print("== users + roles ==")
+s, j = api("users.php", "POST", {"username": "bob", "password": "viewerpass1", "role": "viewer"}, csrf)
+check("create viewer user", s == 200, j)
+api("cameras.php", "POST", cam, csrf)  # re-add for viewer tests
+s, j = api("users.php", "DELETE", {"username": "admin"}, csrf)
+check("cannot delete yourself", s == 400)
+s, j = api("logout.php", "POST")
+s, j = api("login.php", "POST", {"username": "bob", "password": "viewerpass1"})
+check("viewer login", s == 200 and j["role"] == "viewer")
+vcsrf = j.get("csrf")
+s, j = api("cameras.php")
+check("viewer sees cameras without source", s == 200 and j and "source" not in j[0], j)
+s, j = api("cameras.php", "POST", {"name": "x", "source": "rtsp://x"}, vcsrf)
+check("viewer cannot add camera (403)", s == 403)
+s, j = api("users.php")
+check("viewer cannot list users (403)", s == 403)
+s, data = api("snapshot.php?name=testcam", raw=True)
+check("viewer can snapshot", s == 200 and data[:2] == b"\xff\xd8")
+api("logout.php", "POST")
+s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
+api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))
+
+print(f"\n{passed} passed, {failed} failed")
+raise SystemExit(1 if failed else 0)

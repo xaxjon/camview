@@ -1,0 +1,9 @@
+# Never serve data files or generated config — they contain camera credentials.
+<FilesMatch "\.(json|yml)$">
+    Require all denied
+</FilesMatch>
+
+# streams.json.example is safe to serve (dummy data)
+<Files "streams.json.example">
+    Require all granted
+</Files>

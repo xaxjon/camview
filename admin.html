@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camview — cameras</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  #bar { height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  #bar h1 { font-size: 15px; }
+  #bar a { color: #8ab4ff; text-decoration: none; }
+  #bar .spacer { margin-left: auto; }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262626; }
+  th { color: #999; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  td.src { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #999; font-family: monospace; font-size: 12px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+  .dot.online { background: #4caf50; } .dot.standby { background: #777; }
+  .dot.disabled { background: #444; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: #333; color: #aaa; }
+  button { padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer;
+    background: #2d6cdf; color: #fff; }
+  button.ghost { background: #2a2a2a; color: #ccc; }
+  button.danger { background: #662222; }
+  button:hover { filter: brightness(1.2); }
+  input[type=text], input[type=password] { padding: 7px; background: #111;
+    border: 1px solid #333; border-radius: 4px; color: #ddd; width: 100%; }
+  label.cb { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+
+  #modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: center; justify-content: center; }
+  #modal-bg.open { display: flex; }
+  #modal { width: 440px; background: #1b1b1b; border: 1px solid #333; border-radius: 8px;
+    padding: 20px; }
+  #modal h2 { font-size: 16px; margin-bottom: 14px; }
+  #modal .row { margin-bottom: 10px; }
+  #modal .row label { display: block; color: #999; font-size: 12px; margin-bottom: 4px; }
+  #test-result { min-height: 20px; margin: 8px 0; font-size: 13px; }
+  #test-result.ok { color: #4caf50; } #test-result.fail { color: #ff6b6b; }
+  #modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  #err { color: #ff6b6b; min-height: 18px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>Camview — cameras</h1>
+    <a href="index.html">Viewer</a>
+    <a href="users.html">Users</a>
+    <span class="spacer"></span>
+    <span id="who"></span>
+    <a href="#" id="logout">Log out</a>
+  </div>
+  <main>
+    <p style="margin-bottom:14px"><button id="add">+ Add camera</button></p>
+    <table>
+      <thead><tr>
+        <th></th><th>Name</th><th>Source</th><th>Audio</th><th>Enabled</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="err"></div>
+  </main>
+
+  <div id="modal-bg">
+    <div id="modal">
+      <h2 id="modal-title">Add camera</h2>
+      <div class="row"><label>Name (letters, digits, - and _)</label>
+        <input type="text" id="f-name"></div>
+      <div class="row"><label>RTSP source URL</label>
+        <input type="text" id="f-source" placeholder="rtsp://user:pass@ip:554/..."></div>
+      <label class="cb"><input type="checkbox" id="f-transcode"> Transcode audio
+        <span class="badge">needed for AAC cameras</span></label>
+      <label class="cb"><input type="checkbox" id="f-enabled" checked> Enabled</label>
+      <div id="test-result"></div>
+      <div class="actions">
+        <button class="ghost" id="test">Test connection</button>
+        <button class="ghost" id="cancel">Cancel</button>
+        <button id="save">Save</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+let CSRF = '';
+let editing = null;  // original name when editing, null when adding
+
+async function api(path, method = 'GET', data) {
+  const res = await fetch('api/' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  if (res.status === 401) { location = 'login.html'; throw new Error('auth'); }
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+const LABEL = { online: 'online (streaming)', standby: 'standby', disabled: 'disabled' };
+
+async function refresh() {
+  const cams = await api('cameras.php?all=1');
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '';
+  for (const c of cams) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="dot ${c.status}" title="${LABEL[c.status] || c.status}"></span></td>
+      <td></td>
+      <td class="src"></td>
+      <td>${c.transcode_audio ? '<span class="badge">transcode</span>' : ''}</td>
+      <td><input type="checkbox" ${c.enabled ? 'checked' : ''} data-act="toggle"></td>
+      <td>
+        <button class="ghost" data-act="edit">Edit</button>
+        <button class="danger" data-act="del">Delete</button>
+      </td>`;
+    tr.cells[1].textContent = c.name;
+    tr.cells[2].textContent = c.source;
+    tr.cells[2].title = c.source;
+    tr.querySelector('[data-act=toggle]').addEventListener('change', async e => {
+      await api('cameras.php', 'PUT', { original: c.name, name: c.name, source: c.source,
+        transcode_audio: c.transcode_audio, enabled: e.target.checked });
+      refresh();
+    });
+    tr.querySelector('[data-act=edit]').addEventListener('click', () => openModal(c));
+    tr.querySelector('[data-act=del]').addEventListener('click', async () => {
+      if (!confirm(`Delete camera "${c.name}"?`)) return;
+      await api('cameras.php', 'DELETE', { name: c.name });
+      refresh();
+    });
+    rows.appendChild(tr);
+  }
+}
+
+function openModal(cam) {
+  editing = cam ? cam.name : null;
+  document.getElementById('modal-title').textContent = cam ? `Edit ${cam.name}` : 'Add camera';
+  document.getElementById('f-name').value = cam ? cam.name : '';
+  document.getElementById('f-source').value = cam ? cam.source : '';
+  document.getElementById('f-transcode').checked = cam ? cam.transcode_audio : false;
+  document.getElementById('f-enabled').checked = cam ? cam.enabled : true;
+  document.getElementById('test-result').textContent = '';
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+function closeModal() { document.getElementById('modal-bg').classList.remove('open'); }
+
+document.getElementById('add').addEventListener('click', () => openModal(null));
+document.getElementById('cancel').addEventListener('click', closeModal);
+
+document.getElementById('test').addEventListener('click', async () => {
+  const out = document.getElementById('test-result');
+  out.className = '';
+  out.textContent = 'testing…';
+  try {
+    const r = await api('camera-test.php', 'POST', {
+      source: document.getElementById('f-source').value,
+    });
+    if (r.ok) {
+      out.className = 'ok';
+      out.textContent = `OK — video: ${r.video}` +
+        (r.audio ? `, audio: ${r.audio}` : '') + (r.hint ? ` (${r.hint})` : '');
+    } else {
+      out.className = 'fail';
+      out.textContent = r.error;
+    }
+  } catch (e) {
+    out.className = 'fail';
+    out.textContent = e.message;
+  }
+});
+
+document.getElementById('save').addEventListener('click', async () => {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  const cam = {
+    name: document.getElementById('f-name').value.trim(),
+    source: document.getElementById('f-source').value.trim(),
+    transcode_audio: document.getElementById('f-transcode').checked,
+    enabled: document.getElementById('f-enabled').checked,
+  };
+  try {
+    if (editing) await api('cameras.php', 'PUT', { original: editing, ...cam });
+    else await api('cameras.php', 'POST', cam);
+    closeModal();
+    refresh();
+  } catch (e) {
+    document.getElementById('test-result').className = 'fail';
+    document.getElementById('test-result').textContent = e.message;
+  }
+});
+
+document.getElementById('logout').addEventListener('click', async e => {
+  e.preventDefault();
+  await api('logout.php', 'POST');
+  location = 'login.html';
+});
+
+(async () => {
+  const me = await api('me.php');
+  if (me.setup_needed) { location = 'setup.html'; return; }
+  if (me.user.role !== 'admin') { location = 'index.html'; return; }
+  CSRF = me.csrf;
+  document.getElementById('who').textContent = me.user.username;
+  refresh();
+  setInterval(refresh, 15000);
+})();
+</script>
+</body>
+</html>

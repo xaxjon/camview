@@ -1,11 +1,14 @@
 [
-  "NOTE: after editing this file run: sudo python3 gen-config.py && sudo systemctl restart mediamtx-viewer (reboots need nothing — the service starts automatically)",
+  "Manage cameras in the admin UI (admin.html) — it live-applies changes, no restart needed.",
+  "Manual edits to this file still require: sudo python3 gen-config.py && sudo systemctl restart mediamtx-viewer",
+  "Per camera: name (letters/digits/-/_), source (rtsp:// URL), optional transcode_audio: true (AAC cameras), optional enabled: false (keep config but don't stream).",
   {
-    "name": "cam1",
-    "source": "rtsp://user:password@192.168.1.10:554/stream1"
+    "name": "front-door",
+    "source": "rtsp://user:pass@192.168.1.10:554/stream1"
   },
   {
-    "name": "cam2",
-    "source": "rtsp://user:password@192.168.1.11:554/stream1"
+    "name": "driveway",
+    "source": "rtsp://user:pass@192.168.1.11:554/stream1",
+    "transcode_audio": true
   }
 ]

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RTSP Viewer</title>
+<title>Camview</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; background: #111; color: #ddd;
@@ -12,6 +12,7 @@
   #bar { height: 36px; display: flex; align-items: center; gap: 12px;
     padding: 0 12px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
   #bar h1 { font-size: 14px; font-weight: 600; }
+  #bar a { color: #8ab4ff; text-decoration: none; font-size: 13px; }
   #bar .hint { margin-left: auto; color: #888; font-size: 12px; }
 
   #stage { height: calc(100% - 36px); display: flex;
@@ -26,23 +27,30 @@
   .tile .label { position: absolute; left: 0; bottom: 0; padding: 2px 8px;
     background: rgba(0,0,0,.55); font-size: 12px; border-radius: 0 4px 0 0;
     pointer-events: none; }
+  .tile .dot { position: absolute; left: 8px; top: 8px; width: 10px; height: 10px;
+    border-radius: 50%; background: #777; pointer-events: none; }
+  .tile .dot.online { background: #4caf50; }
   .tile .status { position: absolute; inset: 0; display: flex;
     align-items: center; justify-content: center; color: #999;
     background: rgba(0,0,0,.35); font-size: 13px; pointer-events: none; }
   .tile .status[hidden] { display: none; }
 
-  .tile .mute { position: absolute; right: 6px; bottom: 6px; width: 28px;
-    height: 28px; border: none; border-radius: 4px; cursor: pointer;
-    background: rgba(0,0,0,.55); color: #ddd; font-size: 14px; }
-  .tile .mute:hover { background: rgba(60,60,60,.8); }
+  .tile .btn { position: absolute; width: 28px; height: 28px; border: none;
+    border-radius: 4px; cursor: pointer; background: rgba(0,0,0,.55);
+    color: #ddd; font-size: 14px; }
+  .tile .btn:hover { background: rgba(60,60,60,.8); }
+  .tile .mute { right: 6px; bottom: 6px; }
+  .tile .snap { right: 40px; bottom: 6px; }
 
   #empty { color: #888; }
 </style>
 </head>
 <body>
   <div id="bar">
-    <h1>RTSP Viewer</h1>
+    <h1>Camview</h1>
     <span id="count"></span>
+    <a href="admin.html" id="admin-link" hidden>⚙ Cameras</a>
+    <a href="#" id="logout">Log out</a>
     <span class="hint">click = fullscreen &nbsp;·&nbsp; double-click = back to grid</span>
   </div>
   <div id="stage">
@@ -144,6 +152,7 @@ async function runStream(name, video, status) {
 function makeTile(stream) {
   const tile = document.createElement('div');
   tile.className = 'tile';
+  tile.dataset.name = stream.name;
 
   const video = document.createElement('video');
   video.muted = true;
@@ -154,11 +163,14 @@ function makeTile(stream) {
   label.className = 'label';
   label.textContent = stream.name;
 
+  const dot = document.createElement('div');
+  dot.className = 'dot';
+
   const status = document.createElement('div');
   status.className = 'status';
 
   const mute = document.createElement('button');
-  mute.className = 'mute';
+  mute.className = 'btn mute';
   mute.textContent = '🔇';
   mute.title = 'Toggle audio';
   mute.addEventListener('click', e => {
@@ -168,7 +180,17 @@ function makeTile(stream) {
   });
   mute.addEventListener('dblclick', e => e.stopPropagation());
 
-  tile.append(video, label, status, mute);
+  const snap = document.createElement('button');
+  snap.className = 'btn snap';
+  snap.textContent = '📷';
+  snap.title = 'Snapshot (opens JPEG)';
+  snap.addEventListener('click', e => {
+    e.stopPropagation();
+    window.open(`api/snapshot.php?name=${encodeURIComponent(stream.name)}`, '_blank');
+  });
+  snap.addEventListener('dblclick', e => e.stopPropagation());
+
+  tile.append(video, label, dot, status, mute, snap);
 
   // single click -> fullscreen, double click -> back to grid
   tile.addEventListener('click', () => {
@@ -182,25 +204,45 @@ function makeTile(stream) {
   runStream(stream.name, video, status);
 }
 
-async function init() {
-  let streams;
+// refresh status dots from the API (cameras come and go)
+async function refreshDots() {
   try {
-    const res = await fetch('streams.json', { cache: 'no-store' });
-    if (!res.ok) throw new Error(String(res.status));
-    streams = await res.json();
+    const cams = await (await fetch('api/cameras.php', { cache: 'no-store' })).json();
+    for (const c of cams) {
+      const dot = grid.querySelector(`.tile[data-name="${CSS.escape(c.name)}"] .dot`);
+      if (dot) dot.classList.toggle('online', c.status === 'online');
+    }
+  } catch { /* keep last known state */ }
+}
+
+async function init() {
+  let me;
+  try {
+    me = await (await fetch('api/me.php', { cache: 'no-store' })).json();
   } catch {
-    grid.outerHTML = '<p id="empty">No streams.json — copy streams.json.example and edit it</p>';
+    grid.outerHTML = '<p id="empty">API unreachable — is PHP running?</p>';
     return;
   }
-  // string entries in streams.json are comments — skip them
-  streams = streams.filter(s => s && typeof s === 'object' && s.name && s.source);
+  if (me.setup_needed) { location = 'setup.html'; return; }
+  if (!me.user) { location = 'login.html'; return; }
+  if (me.user.role === 'admin') document.getElementById('admin-link').hidden = false;
+
+  document.getElementById('logout').addEventListener('click', async e => {
+    e.preventDefault();
+    await fetch('api/logout.php', { method: 'POST' });
+    location = 'login.html';
+  });
+
+  const streams = await (await fetch('api/cameras.php', { cache: 'no-store' })).json();
   if (!streams.length) {
-    grid.outerHTML = '<p id="empty">No streams configured — edit streams.json</p>';
+    grid.outerHTML = '<p id="empty">No cameras configured yet</p>';
     return;
   }
-  count.textContent = `${streams.length} stream${streams.length > 1 ? 's' : ''}`;
+  count.textContent = `${streams.length} camera${streams.length > 1 ? 's' : ''}`;
   streams.forEach(makeTile);
   layout();
+  refreshDots();
+  setInterval(refreshDots, 15000);
 }
 
 window.addEventListener('beforeunload', () => peers.forEach(pc => pc.close()));
