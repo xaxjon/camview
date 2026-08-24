@@ -79,6 +79,23 @@ config UI's *Test connection* button tells you what the camera sends:
 
 Tiles start muted (browser autoplay rules) — click the 🔊 button.
 
+## Updating a deployment
+
+Deployments are plain git clones of this repo — camera lists, users and
+generated config are git-ignored and survive pulls:
+
+```sh
+cd /path/to/camview
+git pull
+# first time only, or when bin/ is missing: ./setup.sh
+```
+
+If the pull changed `gen-config.py`, refresh the running config:
+`sudo python3 gen-config.py && sudo systemctl restart mediamtx-viewer`
+(or just re-save a camera in the admin UI, which live-applies).
+Data files stay writable by the web server across pulls because git never
+touches them.
+
 ## Security notes
 
 - `streams.json` / `users.json` / `mediamtx.yml` contain credentials and
