@@ -1,0 +1,11 @@
+[
+  "NOTE: after editing this file run: sudo python3 gen-config.py && sudo systemctl restart mediamtx-viewer (reboots need nothing — the service starts automatically)",
+  {
+    "name": "cam1",
+    "source": "rtsp://user:password@192.168.1.10:554/stream1"
+  },
+  {
+    "name": "cam2",
+    "source": "rtsp://user:password@192.168.1.11:554/stream1"
+  }
+]

@@ -1,0 +1,16 @@
+[Unit]
+Description=RTSP Viewer streaming gateway (MediaMTX)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Adjust paths to where you deployed rtsp-viewer.
+ExecStart=/var/www/html/rtsp-viewer/bin/mediamtx /var/www/html/rtsp-viewer/mediamtx.yml
+Restart=always
+RestartSec=5
+# Optional hardening (hooks must still be able to run bin/ffmpeg):
+# User=www-data
+# NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

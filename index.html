@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTSP Viewer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #111; color: #ddd;
+    font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+
+  #bar { height: 36px; display: flex; align-items: center; gap: 12px;
+    padding: 0 12px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  #bar h1 { font-size: 14px; font-weight: 600; }
+  #bar .hint { margin-left: auto; color: #888; font-size: 12px; }
+
+  #stage { height: calc(100% - 36px); display: flex;
+    align-items: center; justify-content: center; }
+  #grid { display: grid; gap: 4px; }
+
+  .tile { position: relative; background: #000; overflow: hidden;
+    border: 1px solid #2a2a2a; border-radius: 4px; cursor: pointer; }
+  .tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .tile:fullscreen { border: none; border-radius: 0; cursor: default; }
+
+  .tile .label { position: absolute; left: 0; bottom: 0; padding: 2px 8px;
+    background: rgba(0,0,0,.55); font-size: 12px; border-radius: 0 4px 0 0;
+    pointer-events: none; }
+  .tile .status { position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center; color: #999;
+    background: rgba(0,0,0,.35); font-size: 13px; pointer-events: none; }
+  .tile .status[hidden] { display: none; }
+
+  .tile .mute { position: absolute; right: 6px; bottom: 6px; width: 28px;
+    height: 28px; border: none; border-radius: 4px; cursor: pointer;
+    background: rgba(0,0,0,.55); color: #ddd; font-size: 14px; }
+  .tile .mute:hover { background: rgba(60,60,60,.8); }
+
+  #empty { color: #888; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>RTSP Viewer</h1>
+    <span id="count"></span>
+    <span class="hint">click = fullscreen &nbsp;·&nbsp; double-click = back to grid</span>
+  </div>
+  <div id="stage">
+    <div id="grid"></div>
+  </div>
+
+<script>
+'use strict';
+
+const grid  = document.getElementById('grid');
+const count = document.getElementById('count');
+const peers = new Map();   // name -> RTCPeerConnection
+
+// ---------- layout ----------
+
+// Pick the column count that maximizes tile area, assuming 16:9 tiles
+// that must all fit in the viewport without scrolling.
+function bestLayout(n, W, H) {
+  let best = null;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    let w = W / cols, h = w * 9 / 16;
+    if (h * rows > H) { h = H / rows; w = h * 16 / 9; }
+    if (!best || w * h > best.w * best.h) best = { cols, w, h };
+  }
+  return best;
+}
+
+function layout() {
+  const tiles = grid.children;
+  if (!tiles.length) return;
+  const stage = document.getElementById('stage');
+  const W = stage.clientWidth - 8, H = stage.clientHeight - 8;
+  const { cols, w, h } = bestLayout(tiles.length, W, H);
+  const gap = 4;
+  grid.style.gridTemplateColumns = `repeat(${cols}, ${Math.floor(w - gap)}px)`;
+  grid.style.gridAutoRows = `${Math.floor(h - gap)}px`;
+}
+
+window.addEventListener('resize', layout);
+
+// ---------- WebRTC (WHEP) ----------
+
+function waitForIce(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', done);
+        resolve();
+      }
+    };
+    pc.addEventListener('icegatheringstatechange', done);
+    setTimeout(resolve, 2000); // never hang the handshake
+  });
+}
+
+async function connect(name, video) {
+  const pc = new RTCPeerConnection();
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  pc.ontrack = e => { video.srcObject = e.streams[0]; };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await waitForIce(pc);
+
+  const url = `http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/sdp' },
+    body: pc.localDescription.sdp,
+  });
+  if (!res.ok) {
+    pc.close();
+    throw new Error(`WHEP ${res.status}`);
+  }
+  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  peers.set(name, pc);
+}
+
+async function runStream(name, video, status) {
+  for (;;) {
+    status.textContent = 'connecting…';
+    status.hidden = false;
+    try {
+      await connect(name, video);
+      status.hidden = true;
+      return; // connected; tracks keep flowing until page unload
+    } catch (err) {
+      console.warn(name, err);
+      status.textContent = 'offline — retrying…';
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+}
+
+// ---------- UI ----------
+
+function makeTile(stream) {
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+
+  const video = document.createElement('video');
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = stream.name;
+
+  const status = document.createElement('div');
+  status.className = 'status';
+
+  const mute = document.createElement('button');
+  mute.className = 'mute';
+  mute.textContent = '🔇';
+  mute.title = 'Toggle audio';
+  mute.addEventListener('click', e => {
+    e.stopPropagation();
+    video.muted = !video.muted;
+    mute.textContent = video.muted ? '🔇' : '🔊';
+  });
+  mute.addEventListener('dblclick', e => e.stopPropagation());
+
+  tile.append(video, label, status, mute);
+
+  // single click -> fullscreen, double click -> back to grid
+  tile.addEventListener('click', () => {
+    if (!document.fullscreenElement) tile.requestFullscreen().catch(() => {});
+  });
+  tile.addEventListener('dblclick', () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+  });
+
+  grid.appendChild(tile);
+  runStream(stream.name, video, status);
+}
+
+async function init() {
+  let streams;
+  try {
+    streams = await (await fetch('streams.json', { cache: 'no-store' })).json();
+  } catch {
+    grid.outerHTML = '<p id="empty">Could not load streams.json</p>';
+    return;
+  }
+  // string entries in streams.json are comments — skip them
+  streams = streams.filter(s => s && typeof s === 'object' && s.name && s.source);
+  if (!streams.length) {
+    grid.outerHTML = '<p id="empty">No streams configured — edit streams.json</p>';
+    return;
+  }
+  count.textContent = `${streams.length} stream${streams.length > 1 ? 's' : ''}`;
+  streams.forEach(makeTile);
+  layout();
+}
+
+window.addEventListener('beforeunload', () => peers.forEach(pc => pc.close()));
+
+init();
+</script>
+</body>
+</html>

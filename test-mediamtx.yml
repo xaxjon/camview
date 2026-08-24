@@ -1,0 +1,11 @@
+logLevel: info
+rtsp: true
+rtspAddress: :8554
+webrtc: true
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+hls: false
+api: true
+apiAddress: 127.0.0.1:9997
+paths:
+  test:
