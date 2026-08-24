@@ -54,6 +54,8 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 def main():
     try:
         streams = json.loads((ROOT / "streams.json").read_text())
+    except FileNotFoundError:
+        sys.exit("streams.json not found — run: cp streams.json.example streams.json (then edit it)")
     except json.JSONDecodeError as e:
         sys.exit(f"streams.json is not valid JSON: {e}")
     if not isinstance(streams, list) or not streams:
@@ -77,7 +79,7 @@ def main():
 
         if s.get("transcode_audio"):
             if not FFMPEG.exists():
-                sys.exit(f"{name}: transcode_audio needs {FFMPEG} (not found)")
+                sys.exit(f"{name}: transcode_audio needs {FFMPEG} — run ./setup.sh first")
             cmd = TRANSCODE_CMD.format(ffmpeg=FFMPEG, source=source)
             lines.append(
                 f"  {name}:\n"

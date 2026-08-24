@@ -185,9 +185,11 @@ function makeTile(stream) {
 async function init() {
   let streams;
   try {
-    streams = await (await fetch('streams.json', { cache: 'no-store' })).json();
+    const res = await fetch('streams.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(String(res.status));
+    streams = await res.json();
   } catch {
-    grid.outerHTML = '<p id="empty">Could not load streams.json</p>';
+    grid.outerHTML = '<p id="empty">No streams.json — copy streams.json.example and edit it</p>';
     return;
   }
   // string entries in streams.json are comments — skip them

@@ -16,10 +16,19 @@ vanilla-JS page renders them in an auto-sizing grid.
 
 ## Setup
 
-Everything needed is in this directory (MediaMTX and ffmpeg binaries are in
-`bin/`, Linux x86_64).
+**Prerequisite:** the MediaMTX and ffmpeg binaries are **not** in the git
+repo. Fetch them once after cloning (into `bin/`, Linux x86_64/aarch64):
 
-1. Edit `streams.json` — one entry per camera:
+```sh
+./setup.sh
+```
+
+1. Create your camera list from the example and edit it (`streams.json`
+   contains credentials and is git-ignored — never commit it):
+
+   ```sh
+   cp streams.json.example streams.json
+   ```
 
    ```json
    [
@@ -116,11 +125,13 @@ Requires `google-chrome` and the Python `websockets` package.
 
 ## Files
 
-- `streams.json` — your camera list (the only file you edit)
+- `streams.json.example` — template for your camera list; copy to
+  `streams.json` (git-ignored, the only file you edit)
 - `index.html` — the viewer (grid layout, WHEP playback, fullscreen)
 - `gen-config.py` — generates `mediamtx.yml` from `streams.json`
+- `setup.sh` — downloads the MediaMTX + ffmpeg binaries into `bin/`
 - `start.sh` — runs MediaMTX + web server (manual use)
 - `mediamtx-viewer.service` — systemd unit for permanent operation
 - `test_e2e.py`, `test-mediamtx.yml` — end-to-end test
-- `bin/` — MediaMTX and ffmpeg binaries (ffmpeg is needed for
-  `transcode_audio` and the tests)
+- `bin/` — created by `setup.sh` (ffmpeg is needed for `transcode_audio`
+  and the tests)
