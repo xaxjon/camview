@@ -1,11 +1,11 @@
 [Unit]
-Description=RTSP Viewer streaming gateway (MediaMTX)
+Description=Camview streaming gateway (MediaMTX)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Adjust paths to where you deployed rtsp-viewer.
-ExecStart=/var/www/html/rtsp-viewer/bin/mediamtx /var/www/html/rtsp-viewer/mediamtx.yml
+# __DIR__ is replaced by install.sh with the actual install directory.
+ExecStart=__DIR__/bin/mediamtx __DIR__/mediamtx.yml
 Restart=always
 RestartSec=5
 # Optional hardening (hooks must still be able to run bin/ffmpeg):

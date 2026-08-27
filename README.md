@@ -45,37 +45,48 @@ user management and a camera config UI. No build step, no framework.
 
 ## Setup
 
+New server, from scratch:
+
+```sh
+git clone https://github.com/xaxjon/camview.git
+cd camview
+sudo ./install.sh
+```
+
+The installer checks prerequisites (offers to `apt install` missing ones,
+including `php-curl`), downloads the MediaMTX + ffmpeg binaries, creates
+the data files, generates `mediamtx.yml`, sets ownership so both
+`git pull` (as you) and config saves (as the web server) work, and
+installs + starts the `mediamtx-viewer` systemd service with the correct
+paths for the actual directory.
+
+Then open `http://<host>/<path>/setup.html` once to create the first
+admin and log in. The viewer grid is `index.html`; admins also get
+**Cameras** and **Users** pages.
+
+### Manual setup (if you prefer not to run the installer)
+
 ```sh
 ./setup.sh                          # downloads bin/mediamtx + bin/ffmpeg
 cp streams.json.example streams.json
 ```
 
-Then either run manually:
+Either run manually without PHP features:
 
 ```sh
-./start.sh                          # MediaMTX + viewer on :8080 (no PHP features)
+./start.sh                          # MediaMTX + viewer on :8080
 ```
 
-…or, for the full experience (login, config UI), serve the directory with
-Apache + PHP and run MediaMTX as a service:
+…or install the service yourself (replace `__DIR__` in
+`mediamtx-viewer.service` with the install path, `systemctl enable --now`).
+The web server group must be able to write the install directory and the
+data files (`streams.json`, `mediamtx.yml`, `users.json`, `snapshots/`):
 
 ```sh
-sudo cp mediamtx-viewer.service /etc/systemd/system/
-# adjust ExecStart paths in the unit to your install directory
-sudo systemctl daemon-reload && sudo systemctl enable --now mediamtx-viewer
+sudo chown -R "$USER":www-data .
+sudo find . -type d -not -path './.git/*' -exec chmod 2775 {} +
+sudo chmod 660 streams.json mediamtx.yml users.json
 ```
-
-Deployment permissions: the web server user must be able to write
-`streams.json`, `mediamtx.yml`, `users.json` and the `snapshots/` directory
-in the install dir:
-
-```sh
-sudo chown www-data streams.json mediamtx.yml   # users.json and snapshots/ are created by the app
-```
-
-Open `http://<host>/…/setup.html` once to create the first admin, then log
-in. The viewer grid is `index.html`; admins also get **Cameras** and
-**Users** pages.
 
 ## Sound
 
@@ -163,8 +174,10 @@ Requires `google-chrome` and the Python `websockets` package.
   access denied; files are served through the authenticated API)
 - `streams.json.example` — camera list template; copy to `streams.json`
   (git-ignored, contains credentials)
-- `gen-config.py` — generates `mediamtx.yml` from `streams.json`
+- `install.sh` — one-command installer (deps, binaries, ownership, service)
 - `setup.sh` — downloads the MediaMTX + ffmpeg binaries into `bin/`
 - `start.sh` — manual run (MediaMTX + static viewer, no PHP)
-- `mediamtx-viewer.service` — systemd unit for permanent operation
+- `mediamtx-viewer.service` — systemd unit template (`__DIR__` filled by
+  install.sh)
+- `gen-config.py`, `transcode.py` — config generator + transcode watchdog
 - `run-tests.sh`, `test_api.py`, `test_ui.py` — test suite
