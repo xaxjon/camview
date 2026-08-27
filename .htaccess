@@ -7,3 +7,6 @@
 <Files "streams.json.example">
     Require all granted
 </Files>
+
+# Never serve VCS metadata from cloned deployments
+RedirectMatch 404 /\.git
