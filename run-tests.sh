@@ -17,7 +17,7 @@ trap cleanup EXIT
 # --- scratch app copy (binaries symlinked) ---
 rm -rf "$WORK"
 mkdir -p "$WORK"
-cp -r api *.html gen-config.py streams.json.example "$WORK/"
+cp -r api *.html gen-config.py transcode.py streams.json.example "$WORK/"
 ln -s "$ROOT/bin" "$WORK/bin"
 cp streams.json.example "$WORK/streams.json"
 
@@ -64,7 +64,7 @@ EOF
   -f rtsp rtsp://127.0.0.1:18554/test > /tmp/ff_cam.log 2>&1 & PIDS+=($!)
 
 # --- app under PHP's built-in server, pointed at the scratch MediaMTX ---
-(cd "$WORK" && MTX_API=http://127.0.0.1:29997 php -S 127.0.0.1:8090 > /tmp/php.log 2>&1) & PIDS+=($!)
+(cd "$WORK" && MTX_API=http://127.0.0.1:29997 php -S 127.0.0.1:8099 > /tmp/php.log 2>&1) & PIDS+=($!)
 sleep 3
 
 reset_state() { rm -rf "$WORK/snapshots"; rm -f "$WORK/users.json"; cp streams.json.example "$WORK/streams.json"; }

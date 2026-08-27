@@ -30,6 +30,10 @@ user management and a camera config UI. No build step, no framework.
 - Streams are pulled **on demand**: cameras are only connected while at
   least one viewer is watching; everything stops ~10s after the last
   viewer leaves.
+- **Self-healing on flaky links**: tiles detect stalled or dead streams
+  (no picture progress, ICE failure, hung handshake) and reconnect with
+  backoff; stalled transcode processes are killed by a watchdog and
+  restarted, instead of leaking.
 
 ## Requirements
 

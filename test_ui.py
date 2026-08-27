@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UI-level test: drives the camview pages in headless Chrome via CDP.
 
-Expects the app served at http://127.0.0.1:8090/ (php -S) with MTX_API set,
+Expects the app served at http://127.0.0.1:8099/ (php -S) with MTX_API set,
 a fresh install (no users.json), and the fake AAC camera publishing at
 rtsp://127.0.0.1:18554/test.
 """
@@ -13,7 +13,7 @@ import urllib.request
 
 import websockets
 
-BASE = "http://127.0.0.1:8090"
+BASE = "http://127.0.0.1:8099"
 CDP_PORT = 9250
 
 chrome = subprocess.Popen(

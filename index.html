@@ -117,40 +117,87 @@ function waitForIce(pc) {
 
 async function connect(name, video) {
   const pc = new RTCPeerConnection();
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('audio', { direction: 'recvonly' });
-  pc.ontrack = e => { video.srcObject = e.streams[0]; };
+  try {
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+    pc.ontrack = e => { video.srcObject = e.streams[0]; };
 
-  await pc.setLocalDescription(await pc.createOffer());
-  await waitForIce(pc);
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitForIce(pc);
 
-  const url = `http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/sdp' },
-    body: pc.localDescription.sdp,
-  });
-  if (!res.ok) {
+    const url = `http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`;
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 10000); // never wedge on a hung handshake
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`WHEP ${res.status}`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+    peers.set(name, pc);
+    return pc;
+  } catch (err) {
     pc.close();
-    throw new Error(`WHEP ${res.status}`);
+    throw err;
   }
-  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
-  peers.set(name, pc);
+}
+
+// Wait until a peer connection dies (failed, or closed by the stall watchdog).
+function untilDead(pc) {
+  return new Promise(resolve => {
+    if (pc.connectionState === 'closed') return resolve();
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'closed'].includes(pc.connectionState)) resolve();
+    };
+  });
 }
 
 async function runStream(name, video, status) {
+  let attempt = 0;
+
+  // stall watchdog: if the picture stops advancing, the connection is
+  // effectively dead even if ICE still looks fine — force a reconnect.
+  let lastTime = -1, lastProgress = Date.now();
+  const watchdog = setInterval(() => {
+    const pc = peers.get(name);
+    if (!pc) return;
+    if (video.currentTime !== lastTime) {
+      lastTime = video.currentTime;
+      lastProgress = Date.now();
+    } else if (!video.paused && video.readyState >= 2 && Date.now() - lastProgress > 8000) {
+      console.warn(name, 'stream stalled, reconnecting');
+      pc.close();
+    } else if (['failed', 'disconnected'].includes(pc.iceConnectionState) &&
+               Date.now() - lastProgress > 8000) {
+      pc.close();
+    }
+  }, 2000);
+
   for (;;) {
-    status.textContent = 'connecting…';
-    status.hidden = false;
     try {
-      await connect(name, video);
+      status.textContent = attempt ? 'reconnecting…' : 'connecting…';
+      status.hidden = false;
+      const pc = await connect(name, video);
+      attempt = 0;
+      lastTime = -1;
+      lastProgress = Date.now();
       status.hidden = true;
-      return; // connected; tracks keep flowing until page unload
+      await untilDead(pc);
     } catch (err) {
       console.warn(name, err);
-      status.textContent = 'offline — retrying…';
-      await new Promise(r => setTimeout(r, 3000));
     }
+    const pc = peers.get(name);
+    if (pc) { try { pc.close(); } catch {} }
+    peers.delete(name);
+    video.srcObject = null;
+    attempt++;
+    const wait = Math.min(30000, 2000 * attempt);
+    status.textContent = `offline — retrying in ${Math.round(wait / 1000)}s…`;
+    status.hidden = false;
+    await new Promise(r => setTimeout(r, wait));
   }
 }
 
