@@ -103,6 +103,7 @@ async function api(path, method = 'GET', data) {
 }
 
 const LABEL = { online: 'online (streaming)', standby: 'standby', disabled: 'disabled' };
+const fail = e => { document.getElementById('err').textContent = e.message; };
 
 async function refresh() {
   const cams = await api('cameras.php?all=1');
@@ -208,8 +209,8 @@ document.getElementById('logout').addEventListener('click', async e => {
   if (me.user.role !== 'admin') { location = 'index.html'; return; }
   CSRF = me.csrf;
   document.getElementById('who').textContent = me.user.username;
-  refresh();
-  setInterval(refresh, 15000);
+  refresh().catch(fail);
+  setInterval(() => refresh().catch(fail), 15000);
 })();
 </script>
 </body>

@@ -310,7 +310,14 @@ async function init() {
     location = 'login.html';
   });
 
-  const streams = await (await fetch('api/cameras.php', { cache: 'no-store' })).json();
+  const camsRes = await fetch('api/cameras.php', { cache: 'no-store' });
+  if (!camsRes.ok) {
+    const j = await camsRes.json().catch(() => ({}));
+    grid.outerHTML = '<p id="empty"></p>';
+    document.getElementById('empty').textContent = j.error || `API error ${camsRes.status}`;
+    return;
+  }
+  const streams = await camsRes.json();
   if (!streams.length) {
     grid.outerHTML = '<p id="empty">No cameras configured yet</p>';
     return;

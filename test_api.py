@@ -135,5 +135,16 @@ api("logout.php", "POST")
 s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
 api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))
 
+print("== corrupt streams.json surfaces an error ==")
+import pathlib
+sf = pathlib.Path("/tmp/camview-test/streams.json")
+orig = sf.read_text()
+sf.write_text("[{broken")
+s, j = api("cameras.php")
+check("corrupt streams.json -> 500 with message", s == 500 and "not valid JSON" in j.get("error", ""), (s, j))
+sf.write_text(orig)
+s, j = api("cameras.php")
+check("recovers after restore", s == 200, s)
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

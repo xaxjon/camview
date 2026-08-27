@@ -130,8 +130,13 @@ function save_users(array $users): void {
 // Returns list of camera dicts (string comment entries in streams.json are dropped).
 function load_cameras(): array {
     if (!is_file(STREAMS_FILE)) return [];
-    $d = json_decode((string) file_get_contents(STREAMS_FILE), true);
-    if (!is_array($d)) return [];
+    $raw = file_get_contents(STREAMS_FILE);
+    if ($raw === false) json_err('streams.json is not readable by the web server (check ownership)', 500);
+    $d = json_decode($raw, true);
+    if (!is_array($d)) {
+        if (trim($raw) === '') return [];
+        json_err('streams.json is not valid JSON — fix or re-copy it from streams.json.example', 500);
+    }
     $out = [];
     foreach ($d as $s) {
         if (!is_array($s) || !isset($s['name'], $s['source'])) continue;
