@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """API-level test for camview backend (setup, auth, CRUD, test, snapshot, users)."""
 import json
+import os
 import pathlib
 import re
 import urllib.request
 import urllib.parse
 import http.cookiejar
 
-BASE = "http://127.0.0.1:8099/api"
+BASE = f"http://127.0.0.1:{os.environ.get('CAMVIEW_TEST_PORT', '8099')}/api"
 MTX = "http://127.0.0.1:29997"
 
 cj = http.cookiejar.CookieJar()
@@ -92,6 +93,17 @@ if mfiles:
     check("motion jpeg served", s == 200 and data[:2] == b"\xff\xd8", s)
 s, j = api("motion.php?file=..%2f..%2fstreams.json")
 check("motion path traversal rejected", s in (400, 404), s)
+
+print("== active status probe ==")
+s, j = api("cameras.php?refresh=1")
+statuses = {c["name"]: c.get("status") for c in j} if s == 200 else {}
+check("probe marks live camera online", statuses.get("testcam") == "online", statuses)
+s, j = api("cameras.php", "POST", {"name": "deadcam", "source": "rtsp://127.0.0.1:18554/nope"}, csrf)
+check("add dead camera", s == 200, j)
+s, j = api("cameras.php?refresh=1")
+statuses = {c["name"]: c.get("status") for c in j} if s == 200 else {}
+check("probe marks dead camera offline", statuses.get("deadcam") == "offline", statuses)
+api("cameras.php", "DELETE", {"name": "deadcam"}, csrf)
 
 print("== camera test endpoint ==")
 s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/test"}, csrf)

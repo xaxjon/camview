@@ -6,16 +6,18 @@ $u = require_login();
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
-    $status = mtx_path_status();
     $isAdmin = ($u['role'] ?? '') === 'admin';
+    $cams = load_cameras();
+    // admin "refresh": actively probe cameras so dots mean online/offline
+    $status = ($isAdmin && !empty($_GET['refresh'])) ? probe_cameras($cams) : mtx_path_status();
     $all = $isAdmin && !empty($_GET['all']);  // admin UI needs disabled cameras too
     $out = [];
-    foreach (load_cameras() as $c) {
+    foreach ($cams as $c) {
         if (!$c['enabled'] && !$all) continue;  // the grid only shows watchable cameras
         $row = [
             'name' => $c['name'],
             'enabled' => $c['enabled'],
-            'status' => $c['enabled'] ? ($status[$c['name']] ?? 'standby') : 'disabled',
+            'status' => $c['enabled'] ? ($status[$c['name']] ?? (empty($_GET['refresh']) ? 'standby' : 'offline')) : 'disabled',
         ];
         if ($isAdmin) {
             $row['source'] = $c['source'];

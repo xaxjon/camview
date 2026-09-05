@@ -64,7 +64,7 @@ EOF
 # --- fake cameras ---
 ./bin/ffmpeg -hide_banner -loglevel error -re \
   -f lavfi -i testsrc=size=1280x720:rate=25 -f lavfi -i sine=frequency=440 \
-  -c:v libx264 -preset ultrafast -c:a aac -rtsp_transport tcp \
+  -c:v libx264 -preset ultrafast -g 25 -c:a aac -rtsp_transport tcp \
   -f rtsp rtsp://127.0.0.1:18554/test > /tmp/ff_cam.log 2>&1 & PIDS+=($!)
 # moving picture (scene scores >> threshold): mandelbrot zoom
 ./bin/ffmpeg -hide_banner -loglevel error -re \
@@ -78,8 +78,20 @@ EOF
   -f rtsp rtsp://127.0.0.1:18554/static > /tmp/ff_static.log 2>&1 & PIDS+=($!)
 
 # --- app under PHP's built-in server, pointed at the scratch MediaMTX ---
-(cd "$WORK" && MTX_API=http://127.0.0.1:29997 php -S 127.0.0.1:8099 > /tmp/php.log 2>&1) & PIDS+=($!)
+# random port: an orphaned server from a previous run must never shadow us
+TEST_PORT=$(python3 - << 'EOF'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+EOF
+)
+echo "test web port: $TEST_PORT"
+(cd "$WORK" && PHP_CLI_SERVER_WORKERS=6 MTX_API=http://127.0.0.1:29997 MTX_RTSP_PORT=28554 php -S "127.0.0.1:$TEST_PORT" > /tmp/php.log 2>&1) & PIDS+=($!)
 sleep 3
+curl -sf "http://127.0.0.1:$TEST_PORT/api/me.php" > /dev/null || { echo "FAIL: php server did not start"; exit 1; }
+export CAMVIEW_TEST_PORT="$TEST_PORT"
 
 # --- motion supervisor test: moving camera records, static does not ---
 mkdir -p "$MWORK"

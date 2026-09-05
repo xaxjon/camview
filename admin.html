@@ -20,7 +20,13 @@
     color: #999; font-family: monospace; font-size: 12px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
   .dot.online { background: #4caf50; } .dot.standby { background: #777; }
+  .dot.offline { background: #e53935; }
   .dot.disabled { background: #444; }
+  #cam-preview { position: fixed; display: none; z-index: 30; width: 480px;
+    padding: 4px; background: #000; border: 1px solid #2d6cdf; border-radius: 6px;
+    pointer-events: none; }
+  #cam-preview img { width: 100%; display: block; }
+  #cam-preview .cap { font-size: 11px; color: #8ab4ff; padding: 2px; }
   .badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: #333; color: #aaa; }
   button { padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer;
     background: #2d6cdf; color: #fff; }
@@ -57,7 +63,8 @@
     <a href="#" id="logout">Log out</a>
   </div>
   <main>
-    <p style="margin-bottom:14px"><button id="add">+ Add camera</button></p>
+    <p style="margin-bottom:14px"><button id="add">+ Add camera</button>
+      <span id="probe-note" style="color:#777;font-size:12px;margin-left:10px"></span></p>
     <table>
       <thead><tr>
         <th></th><th>Name</th><th>Source</th><th>Audio</th><th>Enabled</th><th></th>
@@ -66,6 +73,8 @@
     </table>
     <div id="err"></div>
   </main>
+
+  <div id="cam-preview"><img alt=""><div class="cap"></div></div>
 
   <div id="modal-bg">
     <div id="modal">
@@ -109,8 +118,33 @@ async function api(path, method = 'GET', data) {
   return j;
 }
 
-const LABEL = { online: 'online (streaming)', standby: 'standby', disabled: 'disabled' };
-const fail = e => { document.getElementById('err').textContent = e.message; };
+const LABEL = { online: 'online', standby: 'standby (not probed)', offline: 'offline', disabled: 'disabled' };
+const fail = e => { document.getElementById('err').textContent = e.message; console.error('admin:', e.message); };
+let probeStatus = {};   // name -> online|offline from the last active probe
+
+function dotFor(c) { return probeStatus[c.name] || c.status; }
+
+// ---------- hover preview (480px live-ish popup) ----------
+let previewTimer = null;
+function showPreview(cam, x, y) {
+  if (!cam.enabled) return;
+  const pv = document.getElementById('cam-preview');
+  const img = pv.querySelector('img');
+  pv.querySelector('.cap').textContent = cam.name;
+  img.onerror = hidePreview;
+  const load = () => { img.src = `api/snapshot.php?preview=${encodeURIComponent(cam.name)}&t=${Date.now()}`; };
+  load();
+  clearInterval(previewTimer);
+  previewTimer = setInterval(load, 2500);
+  pv.style.display = 'block';
+  pv.style.left = Math.min(x + 12, window.innerWidth - 500) + 'px';
+  pv.style.top = Math.min(y + 12, window.innerHeight - 330) + 'px';
+}
+function hidePreview() {
+  clearInterval(previewTimer);
+  previewTimer = null;
+  document.getElementById('cam-preview').style.display = 'none';
+}
 
 async function refresh() {
   const cams = await api('cameras.php?all=1');
@@ -119,7 +153,7 @@ async function refresh() {
   for (const c of cams) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><span class="dot ${c.status}" title="${LABEL[c.status] || c.status}"></span></td>
+      <td><span class="dot ${dotFor(c)}" title="${LABEL[dotFor(c)] || dotFor(c)}"></span></td>
       <td></td>
       <td class="src"></td>
       <td>${c.transcode_audio ? '<span class="badge">transcode</span>' : ''}${c.motion ? ' <span class="badge">motion</span>' : ''}</td>
@@ -131,6 +165,10 @@ async function refresh() {
     tr.cells[1].textContent = c.name;
     tr.cells[2].textContent = c.source;
     tr.cells[2].title = c.source;
+    for (const td of [tr.cells[1], tr.cells[2]]) {
+      td.addEventListener('mouseenter', e => showPreview(c, e.clientX, e.clientY));
+      td.addEventListener('mouseleave', hidePreview);
+    }
     tr.querySelector('[data-act=toggle]').addEventListener('change', async e => {
       await api('cameras.php', 'PUT', { original: c.name, name: c.name, source: c.source,
         transcode_audio: c.transcode_audio, motion: c.motion,
@@ -214,6 +252,7 @@ document.getElementById('save').addEventListener('click', async () => {
     else await api('cameras.php', 'POST', cam);
     closeModal();
     refresh();
+    if (!editing) probe();  // probe newly added cameras; edits wait for the 60s cycle
   } catch (e) {
     document.getElementById('test-result').className = 'fail';
     document.getElementById('test-result').textContent = e.message;
@@ -233,8 +272,29 @@ document.getElementById('logout').addEventListener('click', async e => {
   CSRF = me.csrf;
   document.getElementById('who').textContent = me.user.username;
   refresh().catch(fail);
+  probe();  // actively probe on load so dots show real online/offline
   setInterval(() => refresh().catch(fail), 15000);
+  setInterval(() => probe(), 60000);
 })();
+
+let probing = false;
+async function probe() {
+  if (probing) return;  // never pile probes on top of each other
+  probing = true;
+  const note = document.getElementById('probe-note');
+  note.textContent = 'probing cameras…';
+  try {
+    const cams = await api('cameras.php?refresh=1&all=1');
+    probeStatus = Object.fromEntries(cams.map(c => [c.name, c.status]));  // fresh each probe
+    note.textContent = `status probed ${new Date().toLocaleTimeString()}`;
+    await refresh();
+  } catch (e) {
+    note.textContent = '';
+    fail(e);
+  } finally {
+    probing = false;
+  }
+}
 </script>
 </body>
 </html>
