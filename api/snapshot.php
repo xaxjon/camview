@@ -2,10 +2,8 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
-// Snapshots from configured cameras. Sources are read server-side; clients
-// can only use configured cameras, never arbitrary URLs.
-//   GET  ?preview=<name>  -> one JPEG frame, NOT saved (hover previews)
-//   POST {name}           -> save one frame to snapshots/ (tile 📷 button)
+// Save one JPEG frame from a configured camera into snapshots/.
+// Source is read server-side; clients can only snapshot configured cameras.
 
 require_login();
 
@@ -24,18 +22,6 @@ function grab_frame(string $source): ?string {
          . ' -frames:v 1 -f mjpeg - 2>/dev/null';
     $jpeg = shell_exec($cmd);
     return ($jpeg && strlen($jpeg) > 1000) ? $jpeg : null;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $cam = find_camera((string) ($_GET['preview'] ?? ''));
-    if (!$cam) json_err('camera not found', 404);
-    $jpeg = grab_frame($cam['source']);
-    if (!$jpeg) json_err('could not grab a frame (camera offline?)', 502);
-    header('Content-Type: image/jpeg');
-    header('Content-Length: ' . strlen($jpeg));
-    header('Cache-Control: no-store');
-    echo $jpeg;
-    exit;
 }
 
 check_csrf();

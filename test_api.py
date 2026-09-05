@@ -94,17 +94,6 @@ if mfiles:
 s, j = api("motion.php?file=..%2f..%2fstreams.json")
 check("motion path traversal rejected", s in (400, 404), s)
 
-print("== active status probe ==")
-s, j = api("cameras.php?refresh=1")
-statuses = {c["name"]: c.get("status") for c in j} if s == 200 else {}
-check("probe marks live camera online", statuses.get("testcam") == "online", statuses)
-s, j = api("cameras.php", "POST", {"name": "deadcam", "source": "rtsp://127.0.0.1:18554/nope"}, csrf)
-check("add dead camera", s == 200, j)
-s, j = api("cameras.php?refresh=1")
-statuses = {c["name"]: c.get("status") for c in j} if s == 200 else {}
-check("probe marks dead camera offline", statuses.get("deadcam") == "offline", statuses)
-api("cameras.php", "DELETE", {"name": "deadcam"}, csrf)
-
 print("== camera test endpoint ==")
 s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/test"}, csrf)
 check("probe reports H264", s == 200 and j.get("ok") and "H264" in j.get("video", ""), j)

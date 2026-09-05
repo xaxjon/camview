@@ -203,48 +203,6 @@ function mtx_path_status(): array {
     return $out;
 }
 
-// Probe enabled cameras: briefly open a reader per path so sourceOnDemand /
-// runOnDemand chains start, then report which actually came online.
-// name => 'online' | 'offline'
-function probe_cameras(array $cams): array {
-    $ffmpeg = CAMVIEW_ROOT . '/bin/ffmpeg';
-    $port = getenv('MTX_RTSP_PORT') ?: '8554';
-    $procs = [];
-    foreach ($cams as $c) {
-        if (!$c['enabled']) continue;
-        $cmd = sprintf(
-            'timeout 12 %s -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://127.0.0.1:%s/%s -t 3 -f null -',
-            escapeshellarg($ffmpeg),
-            $port,
-            escapeshellarg($c['name'])
-        );
-        $p = proc_open($cmd, [
-            0 => ['file', '/dev/null', 'r'],
-            1 => ['file', '/dev/null', 'w'],
-            2 => ['file', '/dev/null', 'w'],
-        ], $pipes);
-        if (is_resource($p)) $procs[] = $p;
-    }
-    // poll until every enabled camera is online (early exit) or 8s cap
-    $enabled = array_column(array_filter($cams, fn($c) => $c['enabled']), 'name');
-    $deadline = microtime(true) + 8;
-    do {
-        usleep(500000);
-        $status = mtx_path_status();
-        $done = true;
-        foreach ($enabled as $n) {
-            if (($status[$n] ?? null) !== 'online') { $done = false; break; }
-        }
-    } while (!$done && microtime(true) < $deadline);
-    foreach ($procs as $p) { proc_terminate($p); proc_close($p); }
-
-    $out = [];
-    foreach ($status as $name => $s) {
-        $out[$name] = $s === 'online' ? 'online' : 'offline';
-    }
-    return $out;
-}
-
 // Regenerate mediamtx.yml and live-apply path changes to the running MediaMTX.
 function apply_camera_changes(array $old, array $new): void {
     save_cameras($new);

@@ -128,38 +128,6 @@ async def main():
         check("camera appears in table", (await js(
             "[...document.querySelectorAll('#rows tr td:nth-child(2)')].map(td=>td.textContent)"))
             == ["front-door", "driveway", "testcam"])
-
-        print("== status probe + hover preview ==")
-        dot = None
-        for _ in range(20):
-            await asyncio.sleep(1)
-            dot = await js("""(function(){
-              const row = [...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam'));
-              return row ? row.querySelector('.dot').className : '';
-            })()""")
-            if dot and 'online' in dot:
-                break
-        check("probe marks testcam dot green", bool(dot) and 'online' in dot, dot)
-        dead = await js("""(function(){
-          const row = [...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('front-door'));
-          return row ? row.querySelector('.dot').className : '';
-        })()""")
-        check("probe marks unreachable camera red", bool(dead) and 'offline' in dead, dead)
-        rect2 = await js("""(function(){
-          const row = [...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam'));
-          const r = row.cells[1].getBoundingClientRect();
-          return {x: r.left + 10, y: r.top + r.height / 2};
-        })()""")
-        await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": rect2["x"], "y": rect2["y"]})
-        await asyncio.sleep(1.5)
-        pv = await js("""({
-          display: document.getElementById('cam-preview').style.display,
-          src: document.getElementById('cam-preview').querySelector('img').src
-        })""")
-        check("hover shows 480px preview", pv and pv.get("display") == "block" and "snapshot.php?preview=" in (pv.get("src") or ""), pv)
-        check("preview is 480px wide", await js("document.getElementById('cam-preview').offsetWidth") == 480)
-        await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 20, "y": 300})
-        await asyncio.sleep(0.5)
         check("motion badge in table", await js(
             "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).textContent.includes('motion')"))
 
