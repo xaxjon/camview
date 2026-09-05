@@ -23,10 +23,10 @@
   .dot.offline { background: #e53935; }
   .dot.disabled { background: #444; }
   #cam-preview { position: fixed; display: none; z-index: 30; width: 480px;
-    padding: 4px; background: #000; border: 1px solid #2d6cdf; border-radius: 6px;
-    pointer-events: none; }
+    min-height: 60px; padding: 4px; background: #000; border: 1px solid #2d6cdf;
+    border-radius: 6px; pointer-events: none; }
   #cam-preview img { width: 100%; display: block; }
-  #cam-preview .cap { font-size: 11px; color: #8ab4ff; padding: 2px; }
+  #cam-preview .cap { font-size: 12px; color: #8ab4ff; padding: 6px 4px; }
   .badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: #333; color: #aaa; }
   button { padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer;
     background: #2d6cdf; color: #fff; }
@@ -130,12 +130,15 @@ function showPreview(cam, x, y) {
   if (!cam.enabled) return;
   const pv = document.getElementById('cam-preview');
   const img = pv.querySelector('img');
-  pv.querySelector('.cap').textContent = cam.name;
-  img.onerror = hidePreview;
+  const cap = pv.querySelector('.cap');
+  img.style.display = 'none';
+  cap.textContent = cam.name + ' — loading…';
+  img.onload = () => { img.style.display = 'block'; cap.textContent = cam.name; };
+  img.onerror = () => { img.style.display = 'none'; cap.textContent = cam.name + ' — no frame (offline?)'; };
   const load = () => { img.src = `api/snapshot.php?preview=${encodeURIComponent(cam.name)}&t=${Date.now()}`; };
   load();
   clearInterval(previewTimer);
-  previewTimer = setInterval(load, 2500);
+  previewTimer = setInterval(load, 3000);
   pv.style.display = 'block';
   pv.style.left = Math.min(x + 12, window.innerWidth - 500) + 'px';
   pv.style.top = Math.min(y + 12, window.innerHeight - 330) + 'px';

@@ -20,7 +20,7 @@ function grab_frame(string $source): ?string {
     $ffmpeg = CAMVIEW_ROOT . '/bin/ffmpeg';
     if (!is_executable($ffmpeg)) json_err('bin/ffmpeg not found — run ./setup.sh', 500);
     $cmd = 'timeout 12 ' . escapeshellarg($ffmpeg)
-         . ' -hide_banner -loglevel error -rtsp_transport tcp -i ' . escapeshellarg($source)
+         . ' -hide_banner -loglevel error -timeout 8000000 -rtsp_transport tcp -i ' . escapeshellarg($source)
          . ' -frames:v 1 -f mjpeg - 2>/dev/null';
     $jpeg = shell_exec($cmd);
     return ($jpeg && strlen($jpeg) > 1000) ? $jpeg : null;
