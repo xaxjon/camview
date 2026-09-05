@@ -36,8 +36,10 @@ user management and a camera config UI. No build step, no framework.
   restarted, instead of leaking.
 - **Motion detection** with a lane-timeline page (`motion.html`): one row
   per camera over the past 24h (minute buckets) or 7 days (hour buckets),
-  hover flashes the captured JPEG, click opens it full-size. Per-camera
-  enable from the Cameras page.
+  hover flashes the captured JPEG, click opens a modal viewer with
+  previous/next arrows and 1-frame/sec timelapse playback. Mouse wheel
+  zooms the timeline (double-click resets). Per-camera enable from the
+  Cameras page; recordings auto-purged after 7 days.
 
 ## Requirements
 

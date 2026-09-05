@@ -32,6 +32,31 @@
   #thumb .cap { font-size: 11px; color: #8ab4ff; padding: 2px; }
   #empty { color: #888; }
   #err { color: #ff6b6b; min-height: 18px; margin-top: 8px; }
+
+  /* frame modal */
+  #modal-bg { position: fixed; inset: 0; display: none; z-index: 20;
+    background: rgba(0,0,0,.75); align-items: center; justify-content: center; }
+  #modal-bg.open { display: flex; }
+  #fmodal { position: relative; max-width: 90vw; background: #161616;
+    border: 1px solid #333; border-radius: 8px; padding: 12px; }
+  #fmodal img { display: block; max-width: 86vw; max-height: 76vh;
+    background: #000; margin: 0 auto; }
+  #fmodal .cap { display: flex; align-items: center; gap: 12px; margin-top: 10px;
+    font-size: 13px; color: #aaa; }
+  #fmodal .cap b { color: #ddd; }
+  #fmodal .nav { position: absolute; top: 50%; transform: translateY(-50%);
+    width: 44px; height: 64px; border: none; border-radius: 6px; cursor: pointer;
+    background: rgba(40,40,40,.85); color: #fff; font-size: 26px; line-height: 1; }
+  #fmodal .nav:hover { background: #2d6cdf; }
+  #fmodal .nav:disabled { opacity: .3; cursor: default; background: rgba(40,40,40,.85); }
+  #fmodal #prev { left: 20px; }
+  #fmodal #next { right: 20px; }
+  #fmodal .ctl { padding: 5px 12px; border: 1px solid #333; border-radius: 4px;
+    cursor: pointer; background: #1b1b1b; color: #ccc; font-size: 13px; }
+  #fmodal .ctl:hover { border-color: #2d6cdf; }
+  #fmodal #close { position: absolute; top: 8px; right: 10px; border: none;
+    background: none; color: #888; font-size: 22px; cursor: pointer; }
+  #fmodal #close:hover { color: #fff; }
 </style>
 </head>
 <body>
@@ -50,6 +75,7 @@
       <button data-range="24h" class="active">Past 24 hours</button>
       <button data-range="7d">Past 7 days</button>
       <span class="note" id="note"></span>
+      <span class="note">scroll on a lane to zoom · double-click to reset</span>
     </div>
     <div id="axis"></div>
     <div id="lanes"></div>
@@ -58,13 +84,31 @@
   </main>
   <div id="thumb"><img alt=""><div class="cap"></div></div>
 
+  <div id="modal-bg">
+    <div id="fmodal">
+      <button id="close" title="Close (Esc)">×</button>
+      <img id="fimg" alt="">
+      <button class="nav" id="prev" title="Previous frame (←)">‹</button>
+      <button class="nav" id="next" title="Next frame (→)">›</button>
+      <div class="cap">
+        <button class="ctl" id="play" title="Timelapse (space)">▶ Timelapse</button>
+        <b id="fcam"></b><span id="ftime"></span>
+        <span class="spacer" style="margin-left:auto" id="fpos"></span>
+      </div>
+    </div>
+  </div>
+
 <script>
 'use strict';
 let CSRF = '';
 let range = '24h';
-let data = null;      // api response
-let buckets = {};     // cam -> Map(col -> {count, files: []})
-let COLS = 1440, SPAN = 86400, START = 0;
+let data = null;          // api response
+let buckets = {};         // cam -> Map(col -> {count, files: []})
+let COLS = 1440;
+const FULL = () => range === '24h'
+  ? { span: 86400, cols: 1440 }
+  : { span: 7 * 86400, cols: 168 };
+let VIEW = { start: 0, span: 0 };   // current zoom window (epoch seconds)
 
 async function api(path) {
   const res = await fetch('api/' + path, { cache: 'no-store' });
@@ -76,16 +120,15 @@ async function api(path) {
   return res.json();
 }
 
+// ---------- timeline ----------
+
 function buildBuckets() {
   buckets = {};
-  const now = Math.floor(Date.now() / 1000);
-  if (range === '24h') { COLS = 1440; SPAN = 86400; START = now - 86400; }
-  else { COLS = 168; SPAN = 7 * 86400; START = now - 7 * 86400; }
-  const perCol = SPAN / COLS;
+  const perCol = VIEW.span / COLS;
   for (const cam of data.cams) {
     const m = new Map();
     for (const [ts, rel] of data.files[cam] || []) {
-      const col = Math.floor((ts - START) / perCol);
+      const col = Math.floor((ts - VIEW.start) / perCol);
       if (col < 0 || col >= COLS) continue;
       const b = m.get(col) || { count: 0, files: [] };
       b.count++;
@@ -120,10 +163,12 @@ function draw() {
     cv.dataset.cam = cam;
     cv.addEventListener('mousemove', onHover);
     cv.addEventListener('mouseleave', hideThumb);
-    cv.addEventListener('click', () => {
-      const b = bucketAt(cv, event);
-      if (b) window.open('api/motion.php?file=' + encodeURIComponent(b.files[0]), '_blank');
+    cv.addEventListener('click', ev => {
+      const b = bucketAt(cv, ev);
+      if (b) openModal(cam, b.files[0]);
     });
+    cv.addEventListener('wheel', onZoom, { passive: false });
+    cv.addEventListener('dblclick', resetZoom);
   }
   drawAxis();
 }
@@ -133,11 +178,17 @@ function drawAxis() {
   axis.innerHTML = '';
   const marks = range === '24h' ? 8 : 7;
   for (let i = 0; i <= marks; i++) {
-    const t = new Date((START + SPAN * i / marks) * 1000);
+    const t = new Date((VIEW.start + VIEW.span * i / marks) * 1000);
     const s = document.createElement('span');
-    s.textContent = range === '24h'
-      ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : t.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
+    if (range === '24h') {
+      s.textContent = VIEW.span <= 3600
+        ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      s.textContent = VIEW.span <= 86400 * 2
+        ? t.toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : t.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
+    }
     axis.appendChild(s);
   }
 }
@@ -146,6 +197,28 @@ function bucketAt(cv, ev) {
   const r = cv.getBoundingClientRect();
   const col = Math.floor((ev.clientX - r.left) / r.width * COLS);
   return buckets[cv.dataset.cam]?.get(col);
+}
+
+function onZoom(ev) {
+  ev.preventDefault();
+  const r = ev.currentTarget.getBoundingClientRect();
+  const frac = (ev.clientX - r.left) / r.width;
+  const anchor = VIEW.start + frac * VIEW.span;
+  const factor = ev.deltaY < 0 ? 0.8 : 1.25;
+  const full = FULL().span;
+  let span = Math.min(full, Math.max(300, VIEW.span * factor));  // min 5 minutes
+  const now = Math.floor(Date.now() / 1000);
+  let start = anchor - frac * span;
+  start = Math.max(now - full, Math.min(now - span, start));
+  VIEW = { start, span };
+  buildBuckets();
+  draw();
+}
+
+function resetZoom() {
+  VIEW = { start: Math.floor(Date.now() / 1000) - FULL().span, span: FULL().span };
+  buildBuckets();
+  draw();
 }
 
 function onHover(ev) {
@@ -158,13 +231,79 @@ function onHover(ev) {
   thumb.querySelector('.cap').textContent =
     `${ev.currentTarget.dataset.cam} · ${b.count} frame${b.count > 1 ? 's' : ''}`;
   thumb.style.display = 'block';
-  const x = Math.min(ev.clientX + 16, window.innerWidth - 280);
-  const y = Math.min(ev.clientY + 16, window.innerHeight - 220);
-  thumb.style.left = x + 'px';
-  thumb.style.top = y + 'px';
+  thumb.style.left = Math.min(ev.clientX + 16, window.innerWidth - 280) + 'px';
+  thumb.style.top = Math.min(ev.clientY + 16, window.innerHeight - 220) + 'px';
 }
 
 function hideThumb() { document.getElementById('thumb').style.display = 'none'; }
+
+// ---------- frame modal ----------
+
+const M = { cam: null, files: [], idx: 0, timer: null };
+
+function openModal(cam, rel) {
+  M.cam = cam;
+  M.files = (data.files[cam] || []).map(f => f[1]);
+  M.idx = Math.max(0, M.files.indexOf(rel));
+  document.getElementById('modal-bg').classList.add('open');
+  showFrame();
+}
+
+function closeModal() {
+  stopTimelapse();
+  document.getElementById('modal-bg').classList.remove('open');
+}
+
+function showFrame() {
+  const img = document.getElementById('fimg');
+  img.src = 'api/motion.php?file=' + encodeURIComponent(M.files[M.idx]);
+  const ts = (data.files[M.cam] || [])[M.idx]?.[0];
+  document.getElementById('fcam').textContent = M.cam;
+  document.getElementById('ftime').textContent =
+    ts ? new Date(ts * 1000).toLocaleString() : '';
+  document.getElementById('fpos').textContent = `${M.idx + 1} / ${M.files.length}`;
+  document.getElementById('prev').disabled = M.idx <= 0;
+  document.getElementById('next').disabled = M.idx >= M.files.length - 1;
+}
+
+function step(d) {
+  const i = M.idx + d;
+  if (i < 0 || i >= M.files.length) return;
+  M.idx = i;
+  showFrame();
+}
+
+function startTimelapse() {
+  if (M.idx >= M.files.length - 1) M.idx = -1;   // at the end -> replay from start
+  M.timer = setInterval(() => {
+    if (M.idx >= M.files.length - 1) { stopTimelapse(); return; }
+    step(1);
+  }, 1000);
+  document.getElementById('play').textContent = '⏸ Pause';
+}
+
+function stopTimelapse() {
+  clearInterval(M.timer);
+  M.timer = null;
+  document.getElementById('play').textContent = '▶ Timelapse';
+}
+
+document.getElementById('prev').addEventListener('click', () => { stopTimelapse(); step(-1); });
+document.getElementById('next').addEventListener('click', () => { stopTimelapse(); step(1); });
+document.getElementById('play').addEventListener('click', () => M.timer ? stopTimelapse() : startTimelapse());
+document.getElementById('close').addEventListener('click', closeModal);
+document.getElementById('modal-bg').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('modal-bg').classList.contains('open')) return;
+  if (e.key === 'Escape') closeModal();
+  else if (e.key === 'ArrowLeft') { stopTimelapse(); step(-1); }
+  else if (e.key === 'ArrowRight') { stopTimelapse(); step(1); }
+  else if (e.key === ' ') { e.preventDefault(); M.timer ? stopTimelapse() : startTimelapse(); }
+});
+
+// ---------- page ----------
 
 async function refresh() {
   data = await api('motion.php?range=' + range);
@@ -173,8 +312,8 @@ async function refresh() {
   for (const cam of data.cams) total += (data.files[cam] || []).length;
   document.getElementById('note').textContent =
     `${data.cams.length} camera(s), ${total} motion frame${total === 1 ? '' : 's'} recorded`;
-  buildBuckets();
-  draw();
+  COLS = FULL().cols;
+  resetZoom();
 }
 
 document.querySelectorAll('#controls button').forEach(btn => {
@@ -204,7 +343,7 @@ const fail = e => { document.getElementById('err').textContent = e.message; };
   }
   document.getElementById('who').textContent = me.user.username;
   refresh().catch(fail);
-  setInterval(() => refresh().catch(() => {}), 60000);
+  setInterval(() => { if (!document.getElementById('modal-bg').classList.contains('open')) refresh().catch(() => {}); }, 60000);
 })();
 </script>
 </body>
