@@ -19,11 +19,14 @@
   #controls button.active { background: #2d6cdf; border-color: #2d6cdf; color: #fff; }
   #controls .note { color: #777; font-size: 12px; margin-left: 8px; }
   .lane { display: flex; align-items: center; margin-bottom: 4px; }
-  .lane .name { width: 130px; flex: none; font-size: 13px; color: #bbb;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lane .name { width: 180px; flex: none; font-size: 13px; color: #bbb;
+    display: flex; align-items: center; gap: 8px; }
+  .lane .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lane .camthumb { width: 52px; aspect-ratio: 4/3; object-fit: cover;
+    border-radius: 3px; background: #000; border: 1px solid #262626; flex: none; }
   .lane canvas { flex: 1; height: 42px; background: #161616; border: 1px solid #262626;
     border-radius: 3px; cursor: crosshair; }
-  #axis { display: flex; margin-left: 130px; color: #666; font-size: 11px;
+  #axis { display: flex; margin-left: 180px; color: #666; font-size: 11px;
     justify-content: space-between; padding: 2px 4px; }
   #thumb { position: fixed; display: none; z-index: 10; width: 260px; padding: 4px;
     background: #000; border: 1px solid #2d6cdf; border-radius: 4px;
@@ -145,8 +148,16 @@ function draw() {
   for (const cam of data.cams) {
     const row = document.createElement('div');
     row.className = 'lane';
-    row.innerHTML = '<div class="name"></div><canvas></canvas>';
-    row.querySelector('.name').textContent = cam;
+    row.innerHTML = '<div class="name"><img class="camthumb" alt=""><span></span></div><canvas></canvas>';
+    row.querySelector('.name span').textContent = cam;
+    const camFiles = data.files[cam] || [];
+    const thumbImg = row.querySelector('.camthumb');
+    if (camFiles.length) {
+      thumbImg.src = 'api/motion.php?file=' + encodeURIComponent(camFiles[camFiles.length - 1][1]);
+      thumbImg.title = 'latest motion frame';
+    } else {
+      thumbImg.style.visibility = 'hidden';
+    }
     lanes.appendChild(row);
     const cv = row.querySelector('canvas');
     cv.width = cv.clientWidth;

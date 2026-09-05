@@ -78,6 +78,10 @@
         <span class="badge">needed for AAC cameras</span></label>
       <label class="cb"><input type="checkbox" id="f-motion"> Motion detection
         <span class="badge">records JPEGs, see Motion page</span></label>
+      <div class="row" id="motion-sens-row" style="display:none">
+        <label>Sensitivity: <span id="f-sens-val">5</span> <span style="color:#777">(0 = least, 9 = most)</span></label>
+        <input type="range" id="f-sens" min="0" max="9" step="1" value="5" style="width:100%">
+      </div>
       <label class="cb"><input type="checkbox" id="f-enabled" checked> Enabled</label>
       <div id="test-result"></div>
       <div class="actions">
@@ -151,6 +155,11 @@ function openModal(cam) {
   document.getElementById('f-source').value = cam ? cam.source : '';
   document.getElementById('f-transcode').checked = cam ? cam.transcode_audio : false;
   document.getElementById('f-motion').checked = cam ? !!cam.motion : false;
+  // sensitivity slider 0-9  <->  threshold 0.10..0.01 (5 = default 0.05)
+  const thr = cam && cam.motion_threshold != null ? cam.motion_threshold : 0.05;
+  document.getElementById('f-sens').value = Math.round((0.10 - thr) / 0.01);
+  document.getElementById('f-sens-val').textContent = document.getElementById('f-sens').value;
+  document.getElementById('motion-sens-row').style.display = cam && cam.motion ? 'block' : 'none';
   document.getElementById('f-enabled').checked = cam ? cam.enabled : true;
   document.getElementById('test-result').textContent = '';
   document.getElementById('modal-bg').classList.add('open');
@@ -160,6 +169,12 @@ function closeModal() { document.getElementById('modal-bg').classList.remove('op
 
 document.getElementById('add').addEventListener('click', () => openModal(null));
 document.getElementById('cancel').addEventListener('click', closeModal);
+document.getElementById('f-motion').addEventListener('change', e => {
+  document.getElementById('motion-sens-row').style.display = e.target.checked ? 'block' : 'none';
+});
+document.getElementById('f-sens').addEventListener('input', e => {
+  document.getElementById('f-sens-val').textContent = e.target.value;
+});
 
 document.getElementById('test').addEventListener('click', async () => {
   const out = document.getElementById('test-result');
@@ -191,6 +206,7 @@ document.getElementById('save').addEventListener('click', async () => {
     source: document.getElementById('f-source').value.trim(),
     transcode_audio: document.getElementById('f-transcode').checked,
     motion: document.getElementById('f-motion').checked,
+    motion_threshold: 0.10 - 0.01 * parseInt(document.getElementById('f-sens').value, 10),
     enabled: document.getElementById('f-enabled').checked,
   };
   try {

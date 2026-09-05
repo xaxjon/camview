@@ -104,11 +104,28 @@ async def main():
         check("motion badge in table", await js(
             "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).textContent.includes('motion')"))
 
+        print("== motion sensitivity slider ==")
+        await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=edit]').click()")
+        await asyncio.sleep(0.5)
+        check("slider visible when motion enabled", await js("document.getElementById('motion-sens-row').style.display") == "block")
+        check("slider defaults to 5", await js("document.getElementById('f-sens').value") == "5")
+        await js("document.getElementById('f-sens').value = '7'; document.getElementById('f-sens').dispatchEvent(new Event('input'))")
+        await js("document.getElementById('save').click()")
+        await asyncio.sleep(2)
+        await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=edit]').click()")
+        await asyncio.sleep(0.5)
+        check("slider round-trips to 7", await js("document.getElementById('f-sens').value") == "7")
+        await js("document.getElementById('cancel').click()")
+
         print("== motion timeline page ==")
         await nav("motion.html")
         await asyncio.sleep(2)
         lanes = await js("document.querySelectorAll('.lane').length")
         check("motion page shows one lane per motion camera", lanes == 2, lanes)
+        thumbs = await js("document.querySelectorAll('.lane .camthumb').length")
+        check("lanes have camera thumbnails", thumbs == 2, thumbs)
+        tsrc = await js("[...document.querySelectorAll('.lane')].find(l => l.textContent.includes('testcam')).querySelector('.camthumb').src")
+        check("thumbnail is latest motion jpeg", isinstance(tsrc, str) and "motion.php?file=" in tsrc, tsrc)
         # hover the rightmost bucket that has files in the testcam lane
         pt = await js("""(function(){
           const m = buckets['testcam'];
