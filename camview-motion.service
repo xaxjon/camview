@@ -1,0 +1,16 @@
+[Unit]
+Description=Camview motion detection supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# __DIR__ is replaced by install.sh with the actual install directory.
+ExecStart=/usr/bin/env python3 __DIR__/motion.py
+Restart=always
+RestartSec=5
+# Optional hardening:
+# User=www-data
+# NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

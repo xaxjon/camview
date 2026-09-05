@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """API-level test for camview backend (setup, auth, CRUD, test, snapshot, users)."""
 import json
+import pathlib
 import re
 import urllib.request
+import urllib.parse
 import http.cookiejar
 
 BASE = "http://127.0.0.1:8099/api"
@@ -56,7 +58,7 @@ csrf = j.get("csrf")
 check("csrf token issued", bool(csrf))
 
 print("== camera CRUD + live apply ==")
-cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True}
+cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True, "motion": True}
 s, j = api("cameras.php", "POST", cam); check("add without CSRF rejected", s == 403)
 s, j = api("cameras.php", "POST", cam, csrf)
 check("add camera", s == 200, j)
@@ -70,6 +72,21 @@ check("non-rtsp source rejected", s == 400)
 s, j = api("cameras.php")
 row = next((c for c in j if c["name"] == "testcam"), {})
 check("admin sees source + status", row.get("source", "").startswith("rtsp://") and "status" in row, row)
+
+print("== motion timeline API ==")
+sj = json.loads(pathlib.Path("/tmp/camview-test/streams.json").read_text())
+entry = next(e for e in sj if isinstance(e, dict) and e.get("name") == "testcam")
+check("motion flag persisted in streams.json", entry.get("motion") is True, entry)
+s, j = api("motion.php?range=24h")
+check("testcam listed as motion camera", s == 200 and "testcam" in j.get("cams", []), j)
+mfiles = j.get("files", {}).get("testcam", [])
+check("seeded motion files returned", len(mfiles) == 3, mfiles)
+if mfiles:
+    rel = mfiles[0][1]
+    s, data = api(f"motion.php?file={urllib.parse.quote(rel)}", raw=True)
+    check("motion jpeg served", s == 200 and data[:2] == b"\xff\xd8", s)
+s, j = api("motion.php?file=..%2f..%2fstreams.json")
+check("motion path traversal rejected", s in (400, 404), s)
 
 print("== camera test endpoint ==")
 s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/test"}, csrf)
@@ -136,7 +153,6 @@ s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
 api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))
 
 print("== corrupt streams.json surfaces an error ==")
-import pathlib
 sf = pathlib.Path("/tmp/camview-test/streams.json")
 orig = sf.read_text()
 sf.write_text("[{broken")

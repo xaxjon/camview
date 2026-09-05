@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camview — motion</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  #bar { height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  #bar h1 { font-size: 15px; }
+  #bar a { color: #8ab4ff; text-decoration: none; }
+  #bar .spacer { margin-left: auto; }
+  main { padding: 16px; max-width: 1300px; margin: 0 auto; }
+  #controls { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+  #controls button { padding: 5px 14px; border: 1px solid #333; border-radius: 4px;
+    cursor: pointer; background: #1b1b1b; color: #ccc; }
+  #controls button.active { background: #2d6cdf; border-color: #2d6cdf; color: #fff; }
+  #controls .note { color: #777; font-size: 12px; margin-left: 8px; }
+  .lane { display: flex; align-items: center; margin-bottom: 4px; }
+  .lane .name { width: 130px; flex: none; font-size: 13px; color: #bbb;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lane canvas { flex: 1; height: 42px; background: #161616; border: 1px solid #262626;
+    border-radius: 3px; cursor: crosshair; }
+  #axis { display: flex; margin-left: 130px; color: #666; font-size: 11px;
+    justify-content: space-between; padding: 2px 4px; }
+  #thumb { position: fixed; display: none; z-index: 10; width: 260px; padding: 4px;
+    background: #000; border: 1px solid #2d6cdf; border-radius: 4px;
+    pointer-events: none; }
+  #thumb img { width: 100%; display: block; }
+  #thumb .cap { font-size: 11px; color: #8ab4ff; padding: 2px; }
+  #empty { color: #888; }
+  #err { color: #ff6b6b; min-height: 18px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>Camview — motion</h1>
+    <a href="index.html">Viewer</a>
+    <a href="snapshots.html">Snapshots</a>
+    <a href="admin.html" class="admin-only" hidden>Cameras</a>
+    <a href="users.html" class="admin-only" hidden>Users</a>
+    <span class="spacer"></span>
+    <span id="who"></span>
+    <a href="#" id="logout">Log out</a>
+  </div>
+  <main>
+    <div id="controls">
+      <button data-range="24h" class="active">Past 24 hours</button>
+      <button data-range="7d">Past 7 days</button>
+      <span class="note" id="note"></span>
+    </div>
+    <div id="axis"></div>
+    <div id="lanes"></div>
+    <p id="empty" hidden>No motion-enabled cameras (enable Motion detection on the Cameras page).</p>
+    <div id="err"></div>
+  </main>
+  <div id="thumb"><img alt=""><div class="cap"></div></div>
+
+<script>
+'use strict';
+let CSRF = '';
+let range = '24h';
+let data = null;      // api response
+let buckets = {};     // cam -> Map(col -> {count, files: []})
+let COLS = 1440, SPAN = 86400, START = 0;
+
+async function api(path) {
+  const res = await fetch('api/' + path, { cache: 'no-store' });
+  if (res.status === 401) { location = 'login.html'; throw new Error('auth'); }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function buildBuckets() {
+  buckets = {};
+  const now = Math.floor(Date.now() / 1000);
+  if (range === '24h') { COLS = 1440; SPAN = 86400; START = now - 86400; }
+  else { COLS = 168; SPAN = 7 * 86400; START = now - 7 * 86400; }
+  const perCol = SPAN / COLS;
+  for (const cam of data.cams) {
+    const m = new Map();
+    for (const [ts, rel] of data.files[cam] || []) {
+      const col = Math.floor((ts - START) / perCol);
+      if (col < 0 || col >= COLS) continue;
+      const b = m.get(col) || { count: 0, files: [] };
+      b.count++;
+      b.files.push(rel);
+      m.set(col, b);
+    }
+    buckets[cam] = m;
+  }
+}
+
+function draw() {
+  const lanes = document.getElementById('lanes');
+  lanes.innerHTML = '';
+  for (const cam of data.cams) {
+    const row = document.createElement('div');
+    row.className = 'lane';
+    row.innerHTML = '<div class="name"></div><canvas></canvas>';
+    row.querySelector('.name').textContent = cam;
+    lanes.appendChild(row);
+    const cv = row.querySelector('canvas');
+    cv.width = cv.clientWidth;
+    cv.height = cv.clientHeight;
+    const ctx = cv.getContext('2d');
+    const m = buckets[cam];
+    let max = 1;
+    m.forEach(b => { max = Math.max(max, b.count); });
+    m.forEach((b, col) => {
+      const a = 0.25 + 0.75 * (b.count / max);
+      ctx.fillStyle = `rgba(76,175,80,${a})`;
+      ctx.fillRect(col / COLS * cv.width, 0, Math.max(1, cv.width / COLS), cv.height);
+    });
+    cv.dataset.cam = cam;
+    cv.addEventListener('mousemove', onHover);
+    cv.addEventListener('mouseleave', hideThumb);
+    cv.addEventListener('click', () => {
+      const b = bucketAt(cv, event);
+      if (b) window.open('api/motion.php?file=' + encodeURIComponent(b.files[0]), '_blank');
+    });
+  }
+  drawAxis();
+}
+
+function drawAxis() {
+  const axis = document.getElementById('axis');
+  axis.innerHTML = '';
+  const marks = range === '24h' ? 8 : 7;
+  for (let i = 0; i <= marks; i++) {
+    const t = new Date((START + SPAN * i / marks) * 1000);
+    const s = document.createElement('span');
+    s.textContent = range === '24h'
+      ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : t.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
+    axis.appendChild(s);
+  }
+}
+
+function bucketAt(cv, ev) {
+  const r = cv.getBoundingClientRect();
+  const col = Math.floor((ev.clientX - r.left) / r.width * COLS);
+  return buckets[cv.dataset.cam]?.get(col);
+}
+
+function onHover(ev) {
+  const b = bucketAt(ev.currentTarget, ev);
+  const thumb = document.getElementById('thumb');
+  if (!b) { hideThumb(); return; }
+  const img = thumb.querySelector('img');
+  const rel = b.files[0];
+  if (!img.src.endsWith(rel)) img.src = 'api/motion.php?file=' + encodeURIComponent(rel);
+  thumb.querySelector('.cap').textContent =
+    `${ev.currentTarget.dataset.cam} · ${b.count} frame${b.count > 1 ? 's' : ''}`;
+  thumb.style.display = 'block';
+  const x = Math.min(ev.clientX + 16, window.innerWidth - 280);
+  const y = Math.min(ev.clientY + 16, window.innerHeight - 220);
+  thumb.style.left = x + 'px';
+  thumb.style.top = y + 'px';
+}
+
+function hideThumb() { document.getElementById('thumb').style.display = 'none'; }
+
+async function refresh() {
+  data = await api('motion.php?range=' + range);
+  document.getElementById('empty').hidden = data.cams.length > 0;
+  let total = 0;
+  for (const cam of data.cams) total += (data.files[cam] || []).length;
+  document.getElementById('note').textContent =
+    `${data.cams.length} camera(s), ${total} motion frame${total === 1 ? '' : 's'} recorded`;
+  buildBuckets();
+  draw();
+}
+
+document.querySelectorAll('#controls button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    range = btn.dataset.range;
+    refresh().catch(fail);
+  });
+});
+
+document.getElementById('logout').addEventListener('click', async e => {
+  e.preventDefault();
+  await fetch('api/logout.php', { method: 'POST' });
+  location = 'login.html';
+});
+
+const fail = e => { document.getElementById('err').textContent = e.message; };
+
+(async () => {
+  const me = await (await fetch('api/me.php')).json();
+  if (me.setup_needed) { location = 'setup.html'; return; }
+  if (!me.user) { location = 'login.html'; return; }
+  CSRF = me.csrf;
+  if (me.user.role === 'admin') {
+    document.querySelectorAll('.admin-only').forEach(el => el.hidden = false);
+  }
+  document.getElementById('who').textContent = me.user.username;
+  refresh().catch(fail);
+  setInterval(() => refresh().catch(() => {}), 60000);
+})();
+</script>
+</body>
+</html>

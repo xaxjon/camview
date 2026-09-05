@@ -145,6 +145,9 @@ function load_cameras(): array {
             'source' => $s['source'],
             'transcode_audio' => !empty($s['transcode_audio']),
             'enabled' => ($s['enabled'] ?? true) !== false,
+            'motion' => !empty($s['motion']),
+            'motion_threshold' => isset($s['motion_threshold']) ? (float) $s['motion_threshold'] : null,
+            'motion_source' => $s['motion_source'] ?? null,
         ];
     }
     return $out;
@@ -156,6 +159,9 @@ function save_cameras(array $cams): void {
         $e = ['name' => $c['name'], 'source' => $c['source']];
         if (!empty($c['transcode_audio'])) $e['transcode_audio'] = true;
         if (isset($c['enabled']) && !$c['enabled']) $e['enabled'] = false;
+        if (!empty($c['motion'])) $e['motion'] = true;
+        if (!empty($c['motion_threshold'])) $e['motion_threshold'] = (float) $c['motion_threshold'];
+        if (!empty($c['motion_source'])) $e['motion_source'] = $c['motion_source'];
         $doc[] = $e;
     }
     atomic_write(STREAMS_FILE, json_encode($doc, JSON_PRETTY_PRINT));

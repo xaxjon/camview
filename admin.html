@@ -49,6 +49,7 @@
   <div id="bar">
     <h1>Camview — cameras</h1>
     <a href="index.html">Viewer</a>
+    <a href="motion.html">Motion</a>
     <a href="snapshots.html">Snapshots</a>
     <a href="users.html">Users</a>
     <span class="spacer"></span>
@@ -75,6 +76,8 @@
         <input type="text" id="f-source" placeholder="rtsp://user:pass@ip:554/..."></div>
       <label class="cb"><input type="checkbox" id="f-transcode"> Transcode audio
         <span class="badge">needed for AAC cameras</span></label>
+      <label class="cb"><input type="checkbox" id="f-motion"> Motion detection
+        <span class="badge">records JPEGs, see Motion page</span></label>
       <label class="cb"><input type="checkbox" id="f-enabled" checked> Enabled</label>
       <div id="test-result"></div>
       <div class="actions">
@@ -115,7 +118,7 @@ async function refresh() {
       <td><span class="dot ${c.status}" title="${LABEL[c.status] || c.status}"></span></td>
       <td></td>
       <td class="src"></td>
-      <td>${c.transcode_audio ? '<span class="badge">transcode</span>' : ''}</td>
+      <td>${c.transcode_audio ? '<span class="badge">transcode</span>' : ''}${c.motion ? ' <span class="badge">motion</span>' : ''}</td>
       <td><input type="checkbox" ${c.enabled ? 'checked' : ''} data-act="toggle"></td>
       <td>
         <button class="ghost" data-act="edit">Edit</button>
@@ -126,7 +129,9 @@ async function refresh() {
     tr.cells[2].title = c.source;
     tr.querySelector('[data-act=toggle]').addEventListener('change', async e => {
       await api('cameras.php', 'PUT', { original: c.name, name: c.name, source: c.source,
-        transcode_audio: c.transcode_audio, enabled: e.target.checked });
+        transcode_audio: c.transcode_audio, motion: c.motion,
+        motion_threshold: c.motion_threshold, motion_source: c.motion_source,
+        enabled: e.target.checked });
       refresh();
     });
     tr.querySelector('[data-act=edit]').addEventListener('click', () => openModal(c));
@@ -145,6 +150,7 @@ function openModal(cam) {
   document.getElementById('f-name').value = cam ? cam.name : '';
   document.getElementById('f-source').value = cam ? cam.source : '';
   document.getElementById('f-transcode').checked = cam ? cam.transcode_audio : false;
+  document.getElementById('f-motion').checked = cam ? !!cam.motion : false;
   document.getElementById('f-enabled').checked = cam ? cam.enabled : true;
   document.getElementById('test-result').textContent = '';
   document.getElementById('modal-bg').classList.add('open');
@@ -184,6 +190,7 @@ document.getElementById('save').addEventListener('click', async () => {
     name: document.getElementById('f-name').value.trim(),
     source: document.getElementById('f-source').value.trim(),
     transcode_audio: document.getElementById('f-transcode').checked,
+    motion: document.getElementById('f-motion').checked,
     enabled: document.getElementById('f-enabled').checked,
   };
   try {

@@ -92,11 +92,17 @@ if [ "${SKIP_SYSTEMD:-}" = 1 ]; then
 else
   echo "== installing mediamtx-viewer.service"
   sed "s|__DIR__|$DIR|g" mediamtx-viewer.service > /etc/systemd/system/mediamtx-viewer.service
+  echo "== installing camview-motion.service"
+  sed "s|__DIR__|$DIR|g" camview-motion.service > /etc/systemd/system/camview-motion.service
   systemctl daemon-reload
   systemctl enable --now mediamtx-viewer
   systemctl is-active --quiet mediamtx-viewer \
-    && echo "   service active" \
-    || { echo "   service FAILED to start — check: journalctl -u mediamtx-viewer -n 30" >&2; exit 1; }
+    && echo "   mediamtx-viewer active" \
+    || { echo "   mediamtx-viewer FAILED to start — check: journalctl -u mediamtx-viewer -n 30" >&2; exit 1; }
+  systemctl enable --now camview-motion
+  systemctl is-active --quiet camview-motion \
+    && echo "   camview-motion active" \
+    || { echo "   camview-motion FAILED to start — check: journalctl -u camview-motion -n 30" >&2; exit 1; }
 fi
 
 # ---------- done ----------

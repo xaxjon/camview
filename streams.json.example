@@ -2,9 +2,11 @@
   "Manage cameras in the admin UI (admin.html) — it live-applies changes, no restart needed.",
   "Manual edits to this file still require: sudo python3 gen-config.py && sudo systemctl restart mediamtx-viewer",
   "Per camera: name (letters/digits/-/_), source (rtsp:// URL), optional transcode_audio: true (AAC cameras), optional enabled: false (keep config but don't stream).",
+  "Motion detection: motion: true records JPEGs on movement (see motion.html). Optional motion_threshold (scene score 0..1, default 0.05 — higher = less sensitive) and motion_source (low-res substream URL for near-zero CPU).",
   {
     "name": "front-door",
-    "source": "rtsp://user:pass@192.168.1.10:554/stream1"
+    "source": "rtsp://user:pass@192.168.1.10:554/stream1",
+    "motion": true
   },
   {
     "name": "driveway",

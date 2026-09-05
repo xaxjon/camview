@@ -34,6 +34,10 @@ user management and a camera config UI. No build step, no framework.
   (no picture progress, ICE failure, hung handshake) and reconnect with
   backoff; stalled transcode processes are killed by a watchdog and
   restarted, instead of leaking.
+- **Motion detection** with a lane-timeline page (`motion.html`): one row
+  per camera over the past 24h (minute buckets) or 7 days (hour buckets),
+  hover flashes the captured JPEG, click opens it full-size. Per-camera
+  enable from the Cameras page.
 
 ## Requirements
 
@@ -87,6 +91,36 @@ sudo chown -R "$USER":www-data .
 sudo find . -type d -not -path './.git/*' -exec chmod 2775 {} +
 sudo chmod 660 streams.json mediamtx.yml users.json
 ```
+
+## Motion detection
+
+Enable per camera on the Cameras page (or `"motion": true` in
+`streams.json`). The `camview-motion` service runs one small ffmpeg per
+camera that writes a JPEG on movement to
+`motion/<cam>/<YYYY-MM-DD>/<cam>-<Ymd-His>.jpg`; the **Motion** page shows
+the past 24 hours (per-minute) or 7 days (per-hour) as a lane per camera —
+hover a highlighted bucket to see the captured frame, click for full size.
+Recordings older than 7 days are pruned hourly.
+
+**CPU design (for low-power machines):** by default the detector decodes
+**keyframes only** (`-skip_frame nokey`), roughly 5–15% of full-decode CPU
+per camera; capture cadence then equals the camera's keyframe interval
+(typically 1–2s). For a true 1 JPEG/second at near-zero CPU, point motion
+at the camera's low-res substream:
+
+```json
+{ "name": "cam2", "source": "rtsp://.../live/ch0", "motion": true,
+  "motion_source": "rtsp://.../live/ch1" }
+```
+
+Detection uses ffmpeg's scene score (frame-to-frame difference, 0–1);
+default threshold is **0.05**, adjustable per camera with
+`"motion_threshold"` (higher = less sensitive). Tune on real footage:
+too low catches noise/weather, too high misses people at distance.
+
+Config changes (enable/disable, threshold) are picked up within 30s — no
+service restarts. The detector is `motion.py`, supervised by systemd as
+`camview-motion.service` (installed by `install.sh`).
 
 ## Sound
 
@@ -167,6 +201,9 @@ Requires `google-chrome` and the Python `websockets` package.
 - `index.html` — viewer grid (login required)
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)
+- `motion.html` — motion timeline (lane per camera, hover thumbnails)
+- `motion.py` + `camview-motion.service` — motion detection supervisor
+  (one keyframe-decoding ffmpeg per motion-enabled camera, 7-day retention)
 - `snapshots.html` — snapshot file management (view/download all users,
   delete/purge admin only)
 - `api/` — PHP backend (auth, CRUD, live test, snapshots, MediaMTX client)

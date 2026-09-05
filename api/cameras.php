@@ -20,6 +20,9 @@ if ($method === 'GET') {
         if ($isAdmin) {
             $row['source'] = $c['source'];
             $row['transcode_audio'] = $c['transcode_audio'];
+            $row['motion'] = $c['motion'];
+            $row['motion_threshold'] = $c['motion_threshold'];
+            $row['motion_source'] = $c['motion_source'];
         }
         $out[] = $row;
     }
@@ -42,6 +45,10 @@ function validated_camera(array $b): array {
         'source' => $source,
         'transcode_audio' => !empty($b['transcode_audio']),
         'enabled' => ($b['enabled'] ?? true) !== false,
+        'motion' => !empty($b['motion']),
+        'motion_threshold' => isset($b['motion_threshold']) && $b['motion_threshold'] !== ''
+            ? (float) $b['motion_threshold'] : null,
+        'motion_source' => !empty($b['motion_source']) ? (string) $b['motion_source'] : null,
     ];
 }
 

@@ -86,6 +86,7 @@ async def main():
           document.getElementById('f-name').value = 'testcam';
           document.getElementById('f-source').value = 'rtsp://127.0.0.1:18554/test';
           document.getElementById('f-transcode').checked = true;
+          document.getElementById('f-motion').checked = true;
         """)
         await js("document.getElementById('test').click()")
         for _ in range(30):
@@ -100,6 +101,29 @@ async def main():
         check("camera appears in table", (await js(
             "[...document.querySelectorAll('#rows tr td:nth-child(2)')].map(td=>td.textContent)"))
             == ["front-door", "driveway", "testcam"])
+        check("motion badge in table", await js(
+            "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).textContent.includes('motion')"))
+
+        print("== motion timeline page ==")
+        await nav("motion.html")
+        await asyncio.sleep(2)
+        lanes = await js("document.querySelectorAll('.lane').length")
+        check("motion page shows one lane per motion camera", lanes == 2, lanes)
+        # hover the rightmost bucket that has files in the testcam lane
+        pt = await js("""(function(){
+          const m = buckets['testcam'];
+          if (!m || !m.size) return null;
+          const col = Math.max(...m.keys());
+          const cv = [...document.querySelectorAll('.lane canvas')].find(c => c.dataset.cam === 'testcam');
+          const r = cv.getBoundingClientRect();
+          return {x: r.left + (col + 0.5) / COLS * r.width, y: r.top + r.height / 2};
+        })()""")
+        if pt:
+            await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt["x"], "y": pt["y"]})
+            await asyncio.sleep(1.5)
+        disp = await js("document.getElementById('thumb').style.display")
+        check("hover flashes thumbnail", disp == "block", disp)
+        await nav("admin.html")  # back to the cameras page for the toggle tests
 
         print("== disable/enable via toggle ==")
         await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=toggle]').click()")
