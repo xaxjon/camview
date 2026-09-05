@@ -39,6 +39,7 @@ RESTART_DELAY = 10
 children = {}      # name -> Popen
 running_cfg = {}   # name -> config signature of the running process
 restarted_at = {}  # name -> monotonic time of last (re)start
+fails = {}         # name -> consecutive fast-failure count (backs off retries)
 shutdown = False
 
 
@@ -111,9 +112,14 @@ def reconcile():
         if p is not None and p.poll() is None:
             continue
         if p is not None:
+            # a process that ran for >5min was healthy; reset its backoff
+            runtime = now - restarted_at.get(name, 0)
+            fails[name] = 0 if runtime > 300 else fails.get(name, 0) + 1
             log(f"{name} exited (rc={p.returncode}), will restart")
             children.pop(name, None)
-        if now - restarted_at.get(name, 0) < RESTART_DELAY:
+        # exponential backoff for repeatedly failing cameras (10s -> 5min max)
+        delay = min(300, RESTART_DELAY * (1 << fails.get(name, 0)))
+        if now - restarted_at.get(name, 0) < delay:
             continue
         source, threshold, skip_frame = cfg
         children[name] = subprocess.Popen(
@@ -122,7 +128,7 @@ def reconcile():
         )
         running_cfg[name] = cfg
         restarted_at[name] = now
-        log(f"started {name} (threshold={threshold}, skip_frame={skip_frame})")
+        log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, retry_delay={delay}s)")
 
 
 def prune():
