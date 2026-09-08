@@ -164,6 +164,18 @@ async def main():
         await js(zsel + ".click()")
         await asyncio.sleep(0.5)
         check("zone modal opens", await js("document.getElementById('zone-bg').classList.contains('open')"))
+        # dragging before the frame loads must be ignored (the flitting bug:
+        # drag math against a zero-size box clamped to random corners)
+        pt0 = await js("""(function(){
+          const r = document.getElementById('zone-view').getBoundingClientRect();
+          return {x0: r.left + 5, y0: r.top + 5, x1: r.left + 60, y1: r.top + 40};
+        })()""")
+        await send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": pt0["x0"], "y": pt0["y0"], "button": "left", "clickCount": 1})
+        await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt0["x1"], "y": pt0["y1"]})
+        await send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": pt0["x1"], "y": pt0["y1"], "button": "left", "clickCount": 1})
+        await asyncio.sleep(0.5)
+        check("drag while loading is ignored", await js("zoneRect === null"))
+        check("loading hint shown", "Loading" in await js("document.getElementById('zone-hint').textContent"))
         imgok = False
         for _ in range(20):  # preview grabs a live frame, can take seconds
             imgok = await js("document.getElementById('zone-img').naturalWidth > 0")
@@ -171,6 +183,7 @@ async def main():
                 break
             await asyncio.sleep(1)
         check("zone preview frame loaded", imgok)
+        check("pending cleared after load", await js("document.getElementById('zone-view').classList.contains('pending')") is False)
         pt = await js("""(function(){
           const r = document.getElementById('zone-view').getBoundingClientRect();
           return {x0: r.left + r.width*0.2, y0: r.top + r.height*0.2,
@@ -197,6 +210,33 @@ async def main():
         await js("document.getElementById('zone-accept').click()")
         await asyncio.sleep(2)
         check("ZONE button green after clear+accept", await js(zsel + ".className") == "zone-off")
+
+        # cancel / reopen cycle: no stuck drag, no stale image, fresh drag works
+        await js(zsel + ".click()")
+        await asyncio.sleep(0.5)
+        await js("document.getElementById('zone-cancel').click()")
+        await asyncio.sleep(0.5)
+        check("cancel drops the stale frame", await js("document.getElementById('zone-img').getAttribute('src')") in (None, ""))
+        check("no stuck drag after cancel", await js("zoneDrag === null"))
+        await js(zsel + ".click()")
+        for _ in range(20):
+            ready = await js("!document.getElementById('zone-view').classList.contains('pending') && document.getElementById('zone-img').naturalWidth > 0")
+            if ready:
+                break
+            await asyncio.sleep(1)
+        check("reopen loads a fresh frame", ready)
+        pt = await js("""(function(){
+          const r = document.getElementById('zone-view').getBoundingClientRect();
+          return {x0: r.left + r.width*0.3, y0: r.top + r.height*0.3,
+                  x1: r.left + r.width*0.7, y1: r.top + r.height*0.7};
+        })()""")
+        await send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": pt["x0"], "y": pt["y0"], "button": "left", "clickCount": 1})
+        await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt["x1"], "y": pt["y1"]})
+        await send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": pt["x1"], "y": pt["y1"], "button": "left", "clickCount": 1})
+        await asyncio.sleep(0.5)
+        rect = await js("JSON.stringify(zoneRect && zoneRect.map(v => Math.round(v*100)/100))")
+        check("drag works after reopen", rect == "[0.3,0.3,0.4,0.4]", rect)
+        await js("document.getElementById('zone-cancel').click()")
 
         print("== motion timeline page ==")
         await nav("motion.html")

@@ -37,7 +37,14 @@
   #zone-modal { background: #1b1b1b; border: 1px solid #333; border-radius: 8px; padding: 16px; }
   #zone-view { position: relative; display: inline-block; line-height: 0;
     user-select: none; cursor: crosshair; }
+  /* stable placeholder while the frame loads, so the modal can't reflow
+     mid-drag; removed on img load, after which the box shrink-wraps the img */
+  #zone-view.pending { width: min(80vw, 900px); aspect-ratio: 16/9; background: #000;
+    cursor: wait; }
+  #zone-view.pending img { visibility: hidden; }
   #zone-view img { max-width: min(80vw, 900px); max-height: 70vh; display: block; }
+  #zone-hint { color: #999; font-size: 12px; margin: 6px 0 10px; }
+  #zone-hint.err { color: #ff6b6b; }
   #zone-rect { position: absolute; border: 2px dashed #ffd54f;
     background: rgba(255,213,79,.15); display: none; pointer-events: none; }
   #zone-modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
@@ -110,10 +117,9 @@
   <div id="zone-bg">
     <div id="zone-modal">
       <h2 id="zone-title">Motion zone</h2>
-      <p style="color:#999;font-size:12px;margin:6px 0 10px">
-        Drag a rectangle on the frame — only motion inside it is recorded.</p>
-      <div id="zone-view">
-        <img id="zone-img" alt="camera frame">
+      <p id="zone-hint">Drag a rectangle on the frame — only motion inside it is recorded.</p>
+      <div id="zone-view" class="pending">
+        <img id="zone-img" alt="camera frame" draggable="false">
         <div id="zone-rect"></div>
       </div>
       <div class="actions">
@@ -274,18 +280,43 @@ function drawZoneRect() {
   r.style.height = (h * 100) + '%';
 }
 
+function closeZone() {
+  document.getElementById('zone-bg').classList.remove('open');
+  zoneDrag = null;
+  const img = document.getElementById('zone-img');
+  img.onload = img.onerror = null;
+  img.removeAttribute('src');  // stop a slow fetch and drop the stale frame
+}
+
 function openZone(cam) {
   zoneCam = cam;
   zoneRect = cam.motion_zone ? [...cam.motion_zone] : null;
+  zoneDrag = null;
   document.getElementById('zone-title').textContent = `Motion zone — ${cam.name}`;
-  document.getElementById('zone-img').src =
-    'api/snapshot.php?name=' + encodeURIComponent(cam.name) + '&t=' + Date.now();
+  const view = document.getElementById('zone-view');
+  const hint = document.getElementById('zone-hint');
+  const img = document.getElementById('zone-img');
+  // block selection until the frame is fully loaded: before that the view
+  // box has no real size and drag math would clamp to random corners
+  view.classList.add('pending');
+  hint.className = '';
+  hint.textContent = 'Loading frame…';
+  img.onload = () => {
+    view.classList.remove('pending');
+    hint.textContent = 'Drag a rectangle on the frame — only motion inside it is recorded.';
+  };
+  img.onerror = () => {
+    hint.className = 'err';
+    hint.textContent = 'Could not grab a frame from this camera (offline?) — try again.';
+  };
+  img.src = 'api/snapshot.php?name=' + encodeURIComponent(cam.name) + '&t=' + Date.now();
   drawZoneRect();
   document.getElementById('zone-bg').classList.add('open');
 }
 
 function zonePos(ev) {
   const r = document.getElementById('zone-view').getBoundingClientRect();
+  if (r.width < 10 || r.height < 10) return null;  // frame not laid out yet
   return [
     Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
     Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)),
@@ -294,11 +325,19 @@ function zonePos(ev) {
 
 document.getElementById('zone-view').addEventListener('mousedown', ev => {
   ev.preventDefault();
+  if (document.getElementById('zone-view').classList.contains('pending')) return;
   zoneDrag = zonePos(ev);
 });
 window.addEventListener('mousemove', ev => {
   if (!zoneDrag) return;
-  const [x0, y0] = zoneDrag, [x1, y1] = zonePos(ev);
+  // a stuck drag (missed mouseup, modal closed mid-drag) must never draw
+  if (!document.getElementById('zone-bg').classList.contains('open')) {
+    zoneDrag = null;
+    return;
+  }
+  const p = zonePos(ev);
+  if (!p) return;
+  const [x0, y0] = zoneDrag, [x1, y1] = p;
   zoneRect = [Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)];
   drawZoneRect();
 });
@@ -309,14 +348,14 @@ window.addEventListener('mouseup', () => {
   }
   zoneDrag = null;
 });
+// pointer left the browser window mid-drag -> end the drag
+document.documentElement.addEventListener('mouseleave', () => { zoneDrag = null; });
 
 document.getElementById('zone-clear').addEventListener('click', () => {
   zoneRect = null;
   drawZoneRect();
 });
-document.getElementById('zone-cancel').addEventListener('click', () => {
-  document.getElementById('zone-bg').classList.remove('open');
-});
+document.getElementById('zone-cancel').addEventListener('click', closeZone);
 document.getElementById('zone-accept').addEventListener('click', async () => {
   try {
     await api('cameras.php', 'PUT', {
@@ -325,7 +364,7 @@ document.getElementById('zone-accept').addEventListener('click', async () => {
       motion_threshold: zoneCam.motion_threshold, motion_source: zoneCam.motion_source,
       enabled: zoneCam.enabled, motion_zone: zoneRect,
     });
-    document.getElementById('zone-bg').classList.remove('open');
+    closeZone();
     refresh();
   } catch (e) { fail(e); }
 });
