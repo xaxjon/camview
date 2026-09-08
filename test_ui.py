@@ -158,6 +158,46 @@ async def main():
         check("slider round-trips to 7", val == "7", (diag, click2, val))
         await js("document.getElementById('cancel').click()")
 
+        print("== motion zone editor ==")
+        zsel = "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=zone]')"
+        check("ZONE button green without zone", await js(zsel + ".className") == "zone-off")
+        await js(zsel + ".click()")
+        await asyncio.sleep(0.5)
+        check("zone modal opens", await js("document.getElementById('zone-bg').classList.contains('open')"))
+        imgok = False
+        for _ in range(20):  # preview grabs a live frame, can take seconds
+            imgok = await js("document.getElementById('zone-img').naturalWidth > 0")
+            if imgok:
+                break
+            await asyncio.sleep(1)
+        check("zone preview frame loaded", imgok)
+        pt = await js("""(function(){
+          const r = document.getElementById('zone-view').getBoundingClientRect();
+          return {x0: r.left + r.width*0.2, y0: r.top + r.height*0.2,
+                  x1: r.left + r.width*0.6, y1: r.top + r.height*0.6};
+        })()""")
+        await send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": pt["x0"], "y": pt["y0"], "button": "left", "clickCount": 1})
+        await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pt["x1"], "y": pt["y1"]})
+        await send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": pt["x1"], "y": pt["y1"], "button": "left", "clickCount": 1})
+        await asyncio.sleep(0.5)
+        rect = await js("JSON.stringify(zoneRect && zoneRect.map(v => Math.round(v*100)/100))")
+        check("drag draws wireframe rect", rect == "[0.2,0.2,0.4,0.4]", rect)
+        check("rect overlay visible", await js("document.getElementById('zone-rect').style.display") == "block")
+        await js("document.getElementById('zone-accept').click()")
+        await asyncio.sleep(2)
+        check("modal closes on accept", await js("document.getElementById('zone-bg').classList.contains('open')") is False)
+        check("ZONE button red with active zone", await js(zsel + ".className") == "zone-on")
+        # reopen: saved zone is shown; clear removes it
+        await js(zsel + ".click()")
+        await asyncio.sleep(1)
+        saved = await js("JSON.stringify(zoneRect && zoneRect.map(v => Math.round(v*100)/100))")
+        check("saved zone shown on reopen", saved == "[0.2,0.2,0.4,0.4]", saved)
+        await js("document.getElementById('zone-clear').click()")
+        check("clear removes rect", await js("document.getElementById('zone-rect').style.display") == "none")
+        await js("document.getElementById('zone-accept').click()")
+        await asyncio.sleep(2)
+        check("ZONE button green after clear+accept", await js(zsel + ".className") == "zone-off")
+
         print("== motion timeline page ==")
         await nav("motion.html")
         await asyncio.sleep(2)

@@ -13,6 +13,8 @@ Per-camera options in streams.json:
     "motion_threshold": 0.05  scene score 0..1 (higher = less sensitive)
     "motion_source": "rtsp://.../ch1"  low-res substream for near-zero CPU
                               (keeps 1fps granularity; skips keyframe-only mode)
+    "motion_zone": [x,y,w,h]  normalized 0..1 fractions of the frame; only
+                              motion inside the rectangle triggers capture
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
 exit on its own, and the supervisor watches each child's *decoded-frame*
@@ -62,8 +64,21 @@ def log(msg):
     print(f"motion: {msg}", file=sys.stderr, flush=True)
 
 
+def parse_zone(z):
+    """[x, y, w, h] as 0..1 floats, or None."""
+    if not isinstance(z, (list, tuple)) or len(z) != 4:
+        return None
+    try:
+        x, y, w, h = (float(v) for v in z)
+    except (TypeError, ValueError):
+        return None
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > 1.0001 or y + h > 1.0001:
+        return None
+    return (x, y, min(w, 1.0 - x), min(h, 1.0 - y))
+
+
 def load_config():
-    """name -> (source, threshold, use_skip_frame) for motion-enabled cameras."""
+    """name -> (source, threshold, use_skip_frame, zone) for motion cameras."""
     try:
         data = json.loads(STREAMS.read_text())
     except Exception as e:
@@ -80,15 +95,25 @@ def load_config():
             sub or s["source"],
             s.get("motion_threshold", DEFAULT_THRESHOLD),
             not sub,  # keyframe-only mode only when pulling the main stream
+            parse_zone(s.get("motion_zone")),
         )
     return out
 
 
-def ffmpeg_cmd(name, source, threshold, skip_frame):
+def ffmpeg_cmd(name, source, threshold, skip_frame, zone):
+    filters = []
+    if zone:
+        x, y, w, h = zone
+        # crop before scaling: fewer pixels to scale, resolution-independent
+        filters.append(
+            f"crop=max(floor(iw*{w:.6f}/2)*2\\,2):max(floor(ih*{h:.6f}/2)*2\\,2)"
+            f":floor(iw*{x:.6f}/2)*2:floor(ih*{y:.6f}/2)*2"
+        )
     # showinfo logs one stderr line per decoded frame -> the supervisor's
     # liveness signal; it sits before select so it sees every frame,
     # not just motion frames
-    vf = f"scale=480:-1,showinfo,select='gt(scene,{threshold})'"
+    filters.append(f"scale=480:-1,showinfo,select='gt(scene,{threshold})'")
+    vf = ",".join(filters)
     cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "info",
            "-timeout", TIMEOUT_US, "-rtsp_transport", "tcp"]
     if skip_frame:
@@ -159,16 +184,17 @@ def reconcile():
         delay = min(300, RESTART_DELAY * (1 << fails.get(name, 0)))
         if now - restarted_at.get(name, 0) < delay:
             continue
-        source, threshold, skip_frame = cfg
+        source, threshold, skip_frame, zone = cfg
         children[name] = subprocess.Popen(
-            ffmpeg_cmd(name, source, threshold, skip_frame),
+            ffmpeg_cmd(name, source, threshold, skip_frame, zone),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,  # showinfo frame lines -> watchdog liveness
         )
         running_cfg[name] = cfg
         restarted_at[name] = now
         last_frame[name] = now
-        log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, retry_delay={delay}s)")
+        log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, "
+            f"zone={zone if zone else 'full'}, retry_delay={delay}s)")
 
 
 def drain(timeout):

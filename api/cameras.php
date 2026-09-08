@@ -23,6 +23,7 @@ if ($method === 'GET') {
             $row['motion'] = $c['motion'];
             $row['motion_threshold'] = $c['motion_threshold'];
             $row['motion_source'] = $c['motion_source'];
+            $row['motion_zone'] = $c['motion_zone'];
         }
         $out[] = $row;
     }
@@ -40,6 +41,10 @@ function validated_camera(array $b): array {
     $source = trim((string) ($b['source'] ?? ''));
     if (!preg_match(NAME_RE, $name)) json_err('invalid name (letters, digits, - and _ only)');
     if (!str_starts_with($source, 'rtsp://')) json_err('source must be an rtsp:// URL');
+    $zone = $b['motion_zone'] ?? null;
+    if ($zone !== null && parse_zone($zone) === null) {
+        json_err('motion_zone must be [x, y, w, h] with 0..1 fractions inside the frame');
+    }
     return [
         'name' => $name,
         'source' => $source,
@@ -49,6 +54,7 @@ function validated_camera(array $b): array {
         'motion_threshold' => isset($b['motion_threshold']) && $b['motion_threshold'] !== ''
             ? (float) $b['motion_threshold'] : null,
         'motion_source' => !empty($b['motion_source']) ? (string) $b['motion_source'] : null,
+        'motion_zone' => $zone === null ? null : parse_zone($zone),
     ];
 }
 

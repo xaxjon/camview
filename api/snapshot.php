@@ -24,6 +24,19 @@ function grab_frame(string $source): ?string {
     return ($jpeg && strlen($jpeg) > 1000) ? $jpeg : null;
 }
 
+// GET ?name=<cam> returns one live JPEG frame without saving it
+// (used by the zone editor preview). No side effects, so no CSRF check.
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $cam = find_camera((string) ($_GET['name'] ?? ''));
+    if (!$cam) json_err('camera not found', 404);
+    $jpeg = grab_frame($cam['source']);
+    if (!$jpeg) json_err('could not grab a frame (camera offline?)', 502);
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: no-store');
+    echo $jpeg;
+    exit;
+}
+
 check_csrf();
 
 $cam = find_camera((string) (body()['name'] ?? ''));

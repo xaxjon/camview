@@ -143,7 +143,7 @@ threading.Thread(target=dead_acceptor, args=(38555,), daemon=True).start()
 threading.Event().wait()
 EOF
 
-printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03},{"name":"stallcam","source":"rtsp://127.0.0.1:38554/mov","motion":true,"motion_threshold":0.03},{"name":"deadcam","source":"rtsp://127.0.0.1:38555/x","motion":true,"motion_threshold":0.03}]' \
+printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03},{"name":"zonecam","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03,"motion_zone":[0.0,0.0,0.5,0.5]},{"name":"stallcam","source":"rtsp://127.0.0.1:38554/mov","motion":true,"motion_threshold":0.03},{"name":"deadcam","source":"rtsp://127.0.0.1:38555/x","motion":true,"motion_threshold":0.03}]' \
   > "$MWORK/streams.json"
 cp motion.py "$MWORK/"
 ln -s "$ROOT/bin" "$MWORK/bin"
@@ -160,6 +160,15 @@ if [ "$MOV_COUNT" -lt 2 ]; then echo "FAIL: moving camera produced <2 jpegs"; ex
 if [ "$STATIC_COUNT" -gt 0 ]; then echo "FAIL: static camera produced jpegs"; exit 1; fi
 [ -f "$MWORK/motion/.htaccess" ] || { echo "FAIL: motion .htaccess missing"; exit 1; }
 echo "motion supervisor: ok"
+
+# --- zone camera: crop filter applied, still produces jpegs ---
+pgrep -af 'motion/zonecam' | grep -q 'crop=' \
+  || { echo "FAIL: zonecam ffmpeg has no crop filter"; pgrep -af 'motion/zonecam'; exit 1; }
+ZONE_COUNT=$(find "$MWORK/motion/zonecam" -name '*.jpg' 2>/dev/null | wc -l)
+[ "$ZONE_COUNT" -ge 1 ] || { echo "FAIL: zonecam produced no jpegs"; exit 1; }
+grep -q "started zonecam (threshold=0.03, skip_frame=True, zone=(0.0, 0.0, 0.5, 0.5)" "$MWORK/log.txt" \
+  || { echo "FAIL: zonecam not started with its zone"; grep zonecam "$MWORK/log.txt"; exit 1; }
+echo "motion zone: ok"
 
 # --- stall recovery: frozen and dead connections must be killed+restarted ---
 sleep 10   # proxy freezes at ~8s; watchdog (15s) fires at ~23-25s

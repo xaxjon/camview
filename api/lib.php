@@ -127,6 +127,20 @@ function save_users(array $users): void {
 
 // ---------- cameras store ----------
 
+// Parses a normalized motion zone [x, y, w, h] (0..1 fractions of the frame);
+// returns null when absent/invalid.
+function parse_zone($z): ?array {
+    if (!is_array($z) || count($z) !== 4) return null;
+    $z = array_values($z);
+    foreach ($z as $v) {
+        if (!is_int($v) && !is_float($v)) return null;
+    }
+    [$x, $y, $w, $h] = array_map('floatval', $z);
+    if ($x < 0 || $y < 0 || $w <= 0 || $h <= 0) return null;
+    if ($x + $w > 1.0001 || $y + $h > 1.0001) return null;
+    return [$x, $y, min($w, 1.0 - $x), min($h, 1.0 - $y)];
+}
+
 // Returns list of camera dicts (string comment entries in streams.json are dropped).
 function load_cameras(): array {
     if (!is_file(STREAMS_FILE)) return [];
@@ -148,6 +162,7 @@ function load_cameras(): array {
             'motion' => !empty($s['motion']),
             'motion_threshold' => isset($s['motion_threshold']) ? (float) $s['motion_threshold'] : null,
             'motion_source' => $s['motion_source'] ?? null,
+            'motion_zone' => parse_zone($s['motion_zone'] ?? null),
         ];
     }
     return $out;
@@ -162,6 +177,7 @@ function save_cameras(array $cams): void {
         if (!empty($c['motion'])) $e['motion'] = true;
         if (!empty($c['motion_threshold'])) $e['motion_threshold'] = (float) $c['motion_threshold'];
         if (!empty($c['motion_source'])) $e['motion_source'] = $c['motion_source'];
+        if (!empty($c['motion_zone'])) $e['motion_zone'] = array_map('floatval', $c['motion_zone']);
         $doc[] = $e;
     }
     atomic_write(STREAMS_FILE, json_encode($doc, JSON_PRETTY_PRINT));
