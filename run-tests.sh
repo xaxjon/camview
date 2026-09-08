@@ -60,6 +60,7 @@ paths: {}
 EOF
 ./bin/mediamtx /tmp/mtx-test-camera.yml > /tmp/mtxA.log 2>&1 & PIDS+=($!)
 ./bin/mediamtx /tmp/mtx-test-main.yml > /tmp/mtxB.log 2>&1 & PIDS+=($!)
+sleep 1   # let the RTSP ports bind before the fake cameras connect
 
 # --- fake cameras ---
 ./bin/ffmpeg -hide_banner -loglevel error -re \
@@ -95,11 +96,62 @@ export CAMVIEW_TEST_PORT="$TEST_PORT"
 
 # --- motion supervisor test: moving camera records, static does not ---
 mkdir -p "$MWORK"
-printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03}]' \
+
+# fake failure modes on 38554/38555:
+#  - stallcam sits behind a proxy that relays the mov stream for 8s, then
+#    freezes with sockets held open (half-open connection, no data, no RST)
+#  - deadcam is a socket that accepts and never speaks
+python3 - << 'EOF' & PIDS+=($!)
+import socket, threading, time
+
+def freeze_proxy(listen, upstream, freeze_after):
+    srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", listen)); srv.listen(4)
+    while True:
+        c, _ = srv.accept()
+        try:
+            u = socket.create_connection(upstream)
+        except OSError:
+            c.close(); continue
+        freeze_at = time.time() + freeze_after
+        def pump(src, dst, fa=freeze_at):
+            while True:
+                if time.time() > fa:
+                    time.sleep(3600)  # frozen: sockets open, no data
+                try:
+                    d = src.recv(65536)
+                except OSError:
+                    return
+                if not d:
+                    return
+                try:
+                    dst.sendall(d)
+                except OSError:
+                    return
+        threading.Thread(target=pump, args=(c, u), daemon=True).start()
+        threading.Thread(target=pump, args=(u, c), daemon=True).start()
+
+def dead_acceptor(listen):
+    srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", listen)); srv.listen(4)
+    conns = []
+    while True:
+        conns.append(srv.accept()[0])  # keep the socket open, never speak
+
+threading.Thread(target=freeze_proxy, args=(38554, ("127.0.0.1", 18554), 8), daemon=True).start()
+threading.Thread(target=dead_acceptor, args=(38555,), daemon=True).start()
+threading.Event().wait()
+EOF
+
+printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03},{"name":"stallcam","source":"rtsp://127.0.0.1:38554/mov","motion":true,"motion_threshold":0.03},{"name":"deadcam","source":"rtsp://127.0.0.1:38555/x","motion":true,"motion_threshold":0.03}]' \
   > "$MWORK/streams.json"
 cp motion.py "$MWORK/"
 ln -s "$ROOT/bin" "$MWORK/bin"
-(cd "$MWORK" && MOTION_DIR="$MWORK/motion" MOTION_POLL_INTERVAL=2 nohup python3 motion.py > "$MWORK/log.txt" 2>&1) & PIDS+=($!)
+# RTSP -timeout set high here so the watchdog (not ffmpeg's own timeout) is
+# what must catch the stall; the timeout option itself is verified below.
+MOTION_DIR="$MWORK/motion" MOTION_POLL_INTERVAL=2 \
+  MOTION_STALL_TIMEOUT=15 MOTION_TIMEOUT_US=60000000 \
+  python3 "$MWORK/motion.py" > "$MWORK/log.txt" 2>&1 & PIDS+=($!)
 sleep 25
 MOV_COUNT=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
 STATIC_COUNT=$(find "$MWORK/motion/static" -name '*.jpg' 2>/dev/null | wc -l)
@@ -108,6 +160,33 @@ if [ "$MOV_COUNT" -lt 2 ]; then echo "FAIL: moving camera produced <2 jpegs"; ex
 if [ "$STATIC_COUNT" -gt 0 ]; then echo "FAIL: static camera produced jpegs"; exit 1; fi
 [ -f "$MWORK/motion/.htaccess" ] || { echo "FAIL: motion .htaccess missing"; exit 1; }
 echo "motion supervisor: ok"
+
+# --- stall recovery: frozen and dead connections must be killed+restarted ---
+sleep 10   # proxy freezes at ~8s; watchdog (15s) fires at ~23-25s
+grep -q "stallcam: stalled for" "$MWORK/log.txt" \
+  || { echo "FAIL: watchdog did not kill the frozen stream"; cat "$MWORK/log.txt"; exit 1; }
+grep -q "deadcam: stalled for" "$MWORK/log.txt" \
+  || { echo "FAIL: watchdog did not kill the never-responding camera"; cat "$MWORK/log.txt"; exit 1; }
+grep -q "static: stalled for" "$MWORK/log.txt" \
+  && { echo "FAIL: healthy idle camera wrongly flagged as stalled"; exit 1; }
+grep -q "mov: stalled for" "$MWORK/log.txt" \
+  && { echo "FAIL: healthy moving camera wrongly flagged as stalled"; exit 1; }
+MOV_COUNT2=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
+[ "$MOV_COUNT2" -gt "$MOV_COUNT" ] \
+  || { echo "FAIL: healthy camera stopped producing while stalls were handled"; exit 1; }
+echo "motion stall recovery: ok"
+
+# --- RTSP -timeout: ffmpeg must error out of a silent socket on its own ---
+RW_START=$(date +%s)
+./bin/ffmpeg -hide_banner -loglevel error -timeout 5000000 \
+  -rtsp_transport tcp -i rtsp://127.0.0.1:38555/x -f null - 2>/dev/null
+RW_RC=$?
+RW_ELAPSED=$(( $(date +%s) - RW_START ))
+echo "rtsp -timeout probe: rc=$RW_RC after ${RW_ELAPSED}s"
+if [ "$RW_RC" -eq 0 ] || [ "$RW_ELAPSED" -ge 25 ]; then
+  echo "FAIL: ffmpeg hung on a dead socket despite -timeout"; exit 1
+fi
+echo "rtsp socket timeout: ok"
 
 reset_state() {
   rm -rf "$WORK/snapshots" "$WORK/motion"

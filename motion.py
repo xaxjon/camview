@@ -14,8 +14,17 @@ Per-camera options in streams.json:
     "motion_source": "rtsp://.../ch1"  low-res substream for near-zero CPU
                               (keeps 1fps granularity; skips keyframe-only mode)
 
+Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
+exit on its own, and the supervisor watches each child's CPU time
+(/proc/<pid>/stat utime+stime): a healthy stream makes ffmpeg parse packets
+constantly, while a stuck child (frozen camera, half-open connection,
+blocked read) burns zero CPU. A child with no CPU activity for
+MOTION_STALL_TIMEOUT seconds is killed and restarted with exponential
+backoff. This is independent of scene motion, so idle cameras are never
+mistaken for stalled ones.
+
 Env overrides (used by tests): MOTION_DIR, MOTION_RETENTION_DAYS,
-MOTION_POLL_INTERVAL.
+MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US.
 """
 import json
 import os
@@ -35,10 +44,14 @@ DEFAULT_THRESHOLD = 0.05
 RETENTION_DAYS = int(os.environ.get("MOTION_RETENTION_DAYS", "7"))
 POLL_INTERVAL = float(os.environ.get("MOTION_POLL_INTERVAL", "30"))
 RESTART_DELAY = 10
+STALL_TIMEOUT = float(os.environ.get("MOTION_STALL_TIMEOUT", "120"))
+TIMEOUT_US = os.environ.get("MOTION_TIMEOUT_US", "15000000")  # RTSP socket I/O
 
 children = {}      # name -> Popen
 running_cfg = {}   # name -> config signature of the running process
 restarted_at = {}  # name -> monotonic time of last (re)start
+cpu_seen = {}      # name -> last seen /proc/<pid>/stat utime+stime (jiffies)
+cpu_since = {}     # name -> monotonic time the CPU counter last changed
 fails = {}         # name -> consecutive fast-failure count (backs off retries)
 shutdown = False
 
@@ -71,15 +84,30 @@ def load_config():
 
 def ffmpeg_cmd(name, source, threshold, skip_frame):
     vf = f"scale=480:-1,select='gt(scene,{threshold})'"
-    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "error"]
+    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "error",
+           "-timeout", TIMEOUT_US, "-rtsp_transport", "tcp"]
     if skip_frame:
         cmd += ["-skip_frame", "nokey"]
     cmd += [
-        "-rtsp_transport", "tcp", "-i", source,
+        "-i", source,
         "-vf", vf, "-vsync", "vfr", "-strftime", "1",
         str(MOTION_DIR / name / "%Y-%m-%d" / f"{name}-%Y%m%d-%H%M%S.jpg"),
     ]
     return cmd
+
+
+def read_jiffies(pid):
+    """utime+stime of a process from /proc/<pid>/stat.
+
+    Returns None when unavailable (non-Linux, process gone) — the RTSP
+    -timeout option is then the only protection, same as before.
+    """
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            rest = f.read().rsplit(")", 1)[1].split()  # skip (comm), field 3 = rest[0]
+        return int(rest[11]) + int(rest[12])           # fields 14+15: utime + stime
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def stop_child(name, sig=signal.SIGINT):
@@ -91,6 +119,8 @@ def stop_child(name, sig=signal.SIGINT):
         p.wait(timeout=3)
     except Exception:
         p.kill()
+    cpu_seen.pop(name, None)
+    cpu_since.pop(name, None)
 
 
 def reconcile():
@@ -106,6 +136,25 @@ def reconcile():
 
     # start / restart cameras
     now = time.monotonic()
+
+    # kill stalled children: a healthy stream makes ffmpeg burn CPU
+    # constantly (packet parsing even between keyframes/motion), so zero CPU
+    # for STALL_TIMEOUT means the child is stuck while still "running"
+    for name, p in list(children.items()):
+        if p.poll() is not None:
+            continue
+        jiffies = read_jiffies(p.pid)
+        if jiffies is None:
+            continue
+        if jiffies != cpu_seen.get(name):
+            cpu_seen[name] = jiffies
+            cpu_since[name] = now
+        elif now - cpu_since.get(name, now) > STALL_TIMEOUT:
+            fails[name] = fails.get(name, 0) + 1
+            log(f"{name}: stalled for {STALL_TIMEOUT:.0f}s (no CPU activity) — killing ffmpeg (stall #{fails[name]})")
+            stop_child(name, signal.SIGKILL)  # a blocked read can ignore SIGINT
+            running_cfg.pop(name, None)
+
     for name, cfg in wanted.items():
         (MOTION_DIR / name / today).mkdir(parents=True, exist_ok=True)
         p = children.get(name)
@@ -128,6 +177,8 @@ def reconcile():
         )
         running_cfg[name] = cfg
         restarted_at[name] = now
+        cpu_seen[name] = None
+        cpu_since[name] = now
         log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, retry_delay={delay}s)")
 
 

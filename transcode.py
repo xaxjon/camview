@@ -5,12 +5,14 @@ Usage: transcode.py <rtsp-source> <rtsp-publish-url>
 
 Wraps ffmpeg with a stall watchdog. ffmpeg blocked in a network read
 ignores MediaMTX's SIGINT and leaks forever (frozen camera, WiFi drop).
-This wrapper tracks ffmpeg's -progress output; if ffmpeg produces nothing
-for STALL_TIMEOUT seconds it is killed, and MediaMTX (runOnDemandRestart)
-or the next viewer starts a fresh one.
+This wrapper tracks the child's CPU time (/proc/<pid>/stat): ffmpeg stuck
+in a blocked read burns zero CPU, while any live stream keeps it busy. If
+the CPU counter does not advance for STALL_TIMEOUT seconds the child is
+killed, and MediaMTX (runOnDemandRestart) or the next viewer starts a
+fresh one. (ffmpeg's own -progress output is not a usable signal: it is
+timer-driven and keeps ticking while the input is frozen.)
 """
 import os
-import select
 import shutil
 import signal
 import subprocess
@@ -19,9 +21,19 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FFMPEG = os.path.join(ROOT, "bin", "ffmpeg")
-STALL_TIMEOUT = 20  # seconds without any progress output
+STALL_TIMEOUT = 20  # seconds without any CPU activity
 
 proc = None
+
+
+def jiffies(pid):
+    """utime+stime of a process from /proc/<pid>/stat; None if unavailable."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            rest = f.read().rsplit(")", 1)[1].split()  # skip (comm), field 3 = rest[0]
+        return int(rest[11]) + int(rest[12])           # fields 14+15: utime + stime
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def die(*_):
@@ -44,21 +56,24 @@ def main():
             FFMPEG, "-hide_banner", "-loglevel", "error", "-nostats",
             "-rtsp_transport", "tcp", "-i", source,
             "-c:v", "copy", "-c:a", "libopus", "-ar", "48000", "-ac", "2", "-b:a", "64k",
-            "-progress", "pipe:1", "-stats_period", "2",
             "-rtsp_transport", "tcp", "-f", "rtsp", out,
         ],
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         # stderr stays inherited -> ends up in the MediaMTX log
     )
 
-    last = time.monotonic()
+    last_cpu = None
+    last_change = time.monotonic()
     while proc.poll() is None:
-        ready, _, _ = select.select([proc.stdout], [], [], 2)
-        if ready:
-            if proc.stdout.read1(65536):
-                last = time.monotonic()
-        elif time.monotonic() - last > STALL_TIMEOUT:
-            print(f"transcode: no progress for {STALL_TIMEOUT}s, killing ffmpeg", file=sys.stderr)
+        time.sleep(2)
+        j = jiffies(proc.pid)
+        if j is None:
+            continue  # process gone or no /proc — plain wait covers exit
+        if j != last_cpu:
+            last_cpu = j
+            last_change = time.monotonic()
+        elif time.monotonic() - last_change > STALL_TIMEOUT:
+            print(f"transcode: no CPU activity for {STALL_TIMEOUT}s, killing ffmpeg", file=sys.stderr)
             proc.kill()
             break
     sys.exit(proc.wait())

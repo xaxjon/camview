@@ -124,6 +124,17 @@ Config changes (enable/disable, threshold) are picked up within 30s — no
 service restarts. The detector is `motion.py`, supervised by systemd as
 `camview-motion.service` (installed by `install.sh`).
 
+**Self-healing:** each ffmpeg runs with the RTSP `-timeout` option (default
+15s), so a dead socket makes it exit and get restarted. On top of that the
+supervisor watches each ffmpeg's CPU time: a healthy stream makes ffmpeg
+parse packets constantly, so a child that burns zero CPU for
+`MOTION_STALL_TIMEOUT` seconds (default 120s — frozen camera, half-open
+connection) is killed and restarted with exponential backoff (10s → 5min
+cap). The signal is independent of scene motion, so idle cameras are never
+mistaken for stalled ones. Detection therefore survives network blips and
+camera hangs without a reboot; both knobs are env overrides
+(`MOTION_TIMEOUT_US`, `MOTION_STALL_TIMEOUT`) in the systemd unit if needed.
+
 ## Sound
 
 WebRTC audio only supports **Opus** and **G.711 (PCMU/PCMA)**. The
