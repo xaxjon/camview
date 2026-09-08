@@ -181,6 +181,35 @@ async def main():
             await asyncio.sleep(1.5)
         disp = await js("document.getElementById('thumb').style.display")
         check("hover flashes thumbnail", disp == "block", disp)
+        # hysteresis: a few px beside the marker (empty column) still triggers...
+        ptNear = await js("""(function(){
+          const m = buckets['testcam'];
+          if (!m || !m.size) return null;
+          const col = Math.max(...m.keys());
+          const cv = [...document.querySelectorAll('.lane canvas')].find(c => c.dataset.cam === 'testcam');
+          const r = cv.getBoundingClientRect();
+          // 2 cols past the oldest seeded event: empty column, inside the pad
+          return {x: r.left + (col - 3.5) / COLS * r.width, y: r.top + r.height / 2};
+        })()""")
+        if ptNear:
+            await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": ptNear["x"], "y": ptNear["y"]})
+            await asyncio.sleep(1.5)
+        disp = await js("document.getElementById('thumb').style.display")
+        check("hover beside marker still flashes thumbnail", disp == "block", disp)
+        # ...but far away from any event it does not
+        ptFar = await js("""(function(){
+          const m = buckets['testcam'];
+          if (!m || !m.size) return null;
+          const col = Math.max(...m.keys());
+          const cv = [...document.querySelectorAll('.lane canvas')].find(c => c.dataset.cam === 'testcam');
+          const r = cv.getBoundingClientRect();
+          return {x: r.left + (col - 60.5) / COLS * r.width, y: r.top + r.height / 2};
+        })()""")
+        if ptFar:
+            await send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": ptFar["x"], "y": ptFar["y"]})
+            await asyncio.sleep(1.5)
+        disp = await js("document.getElementById('thumb').style.display")
+        check("hover far from markers hides thumbnail", disp == "none", disp)
 
         print("== frame modal, timelapse, timeline zoom ==")
         await send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": pt["x"], "y": pt["y"], "button": "left", "clickCount": 1})

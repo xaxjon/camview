@@ -107,6 +107,7 @@ let CSRF = '';
 let range = '24h';
 let data = null;          // api response
 let buckets = {};         // cam -> Map(col -> {count, files: []})
+const HOVER_PAD_PX = 6;   // hover/click hit area either side of an event marker
 let COLS = 1440;
 const FULL = () => range === '24h'
   ? { span: 86400, cols: 1440 }
@@ -207,7 +208,20 @@ function drawAxis() {
 function bucketAt(cv, ev) {
   const r = cv.getBoundingClientRect();
   const col = Math.floor((ev.clientX - r.left) / r.width * COLS);
-  return buckets[cv.dataset.cam]?.get(col);
+  const m = buckets[cv.dataset.cam];
+  if (!m) return undefined;
+  const hit = m.get(col);
+  if (hit) return hit;
+  // hysteresis: sparse events get a few px of hit area either side of the
+  // marker, nearest column first
+  const padCols = Math.ceil(HOVER_PAD_PX / r.width * COLS);
+  for (let d = 1; d <= padCols; d++) {
+    const left = m.get(col - d);
+    if (left) return left;
+    const right = m.get(col + d);
+    if (right) return right;
+  }
+  return undefined;
 }
 
 function onZoom(ev) {
