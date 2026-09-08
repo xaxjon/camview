@@ -15,19 +15,22 @@ Per-camera options in streams.json:
                               (keeps 1fps granularity; skips keyframe-only mode)
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
-exit on its own, and the supervisor watches each child's CPU time
-(/proc/<pid>/stat utime+stime): a healthy stream makes ffmpeg parse packets
-constantly, while a stuck child (frozen camera, half-open connection,
-blocked read) burns zero CPU. A child with no CPU activity for
-MOTION_STALL_TIMEOUT seconds is killed and restarted with exponential
-backoff. This is independent of scene motion, so idle cameras are never
-mistaken for stalled ones.
+exit on its own, and the supervisor watches each child's *decoded-frame*
+liveness: a `showinfo` filter logs one line per decoded frame on stderr, and
+a child that decodes nothing for MOTION_STALL_TIMEOUT seconds (frozen
+camera, half-open connection, encoder stuck sending undecodable data) is
+killed and restarted with exponential backoff. This is independent of scene
+motion, so idle cameras are never mistaken for stalled ones. (ffmpeg's
+-progress output is timer-driven and useless for this; socket reads do not
+show up in /proc io; CPU time cannot tell "decoding" from "stuck parsing
+garbage" — decoded frames are the only signal that covers every stall mode.)
 
 Env overrides (used by tests): MOTION_DIR, MOTION_RETENTION_DAYS,
 MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US.
 """
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -50,8 +53,7 @@ TIMEOUT_US = os.environ.get("MOTION_TIMEOUT_US", "15000000")  # RTSP socket I/O
 children = {}      # name -> Popen
 running_cfg = {}   # name -> config signature of the running process
 restarted_at = {}  # name -> monotonic time of last (re)start
-cpu_seen = {}      # name -> last seen /proc/<pid>/stat utime+stime (jiffies)
-cpu_since = {}     # name -> monotonic time the CPU counter last changed
+last_frame = {}    # name -> monotonic time of last decoded frame (showinfo)
 fails = {}         # name -> consecutive fast-failure count (backs off retries)
 shutdown = False
 
@@ -83,8 +85,11 @@ def load_config():
 
 
 def ffmpeg_cmd(name, source, threshold, skip_frame):
-    vf = f"scale=480:-1,select='gt(scene,{threshold})'"
-    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "error",
+    # showinfo logs one stderr line per decoded frame -> the supervisor's
+    # liveness signal; it sits before select so it sees every frame,
+    # not just motion frames
+    vf = f"scale=480:-1,showinfo,select='gt(scene,{threshold})'"
+    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "info",
            "-timeout", TIMEOUT_US, "-rtsp_transport", "tcp"]
     if skip_frame:
         cmd += ["-skip_frame", "nokey"]
@@ -96,31 +101,19 @@ def ffmpeg_cmd(name, source, threshold, skip_frame):
     return cmd
 
 
-def read_jiffies(pid):
-    """utime+stime of a process from /proc/<pid>/stat.
-
-    Returns None when unavailable (non-Linux, process gone) — the RTSP
-    -timeout option is then the only protection, same as before.
-    """
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            rest = f.read().rsplit(")", 1)[1].split()  # skip (comm), field 3 = rest[0]
-        return int(rest[11]) + int(rest[12])           # fields 14+15: utime + stime
-    except (OSError, ValueError, IndexError):
-        return None
-
-
 def stop_child(name, sig=signal.SIGINT):
     p = children.pop(name, None)
-    if not p or p.poll() is not None:
+    if not p:
         return
-    try:
-        p.send_signal(sig)
-        p.wait(timeout=3)
-    except Exception:
-        p.kill()
-    cpu_seen.pop(name, None)
-    cpu_since.pop(name, None)
+    if p.poll() is None:
+        try:
+            p.send_signal(sig)
+            p.wait(timeout=3)
+        except Exception:
+            p.kill()
+    if p.stderr:
+        p.stderr.close()
+    last_frame.pop(name, None)
 
 
 def reconcile():
@@ -137,21 +130,15 @@ def reconcile():
     # start / restart cameras
     now = time.monotonic()
 
-    # kill stalled children: a healthy stream makes ffmpeg burn CPU
-    # constantly (packet parsing even between keyframes/motion), so zero CPU
-    # for STALL_TIMEOUT means the child is stuck while still "running"
+    # kill stalled children: any live stream decodes frames constantly (even
+    # an idle camera decodes keyframes), so no decoded frame for
+    # STALL_TIMEOUT means the child is stuck while still "running"
     for name, p in list(children.items()):
         if p.poll() is not None:
             continue
-        jiffies = read_jiffies(p.pid)
-        if jiffies is None:
-            continue
-        if jiffies != cpu_seen.get(name):
-            cpu_seen[name] = jiffies
-            cpu_since[name] = now
-        elif now - cpu_since.get(name, now) > STALL_TIMEOUT:
+        if now - last_frame.get(name, restarted_at.get(name, now)) > STALL_TIMEOUT:
             fails[name] = fails.get(name, 0) + 1
-            log(f"{name}: stalled for {STALL_TIMEOUT:.0f}s (no CPU activity) — killing ffmpeg (stall #{fails[name]})")
+            log(f"{name}: no decoded frames for {STALL_TIMEOUT:.0f}s — killing stalled ffmpeg (stall #{fails[name]})")
             stop_child(name, signal.SIGKILL)  # a blocked read can ignore SIGINT
             running_cfg.pop(name, None)
 
@@ -166,6 +153,8 @@ def reconcile():
             fails[name] = 0 if runtime > 300 else fails.get(name, 0) + 1
             log(f"{name} exited (rc={p.returncode}), will restart")
             children.pop(name, None)
+            if p.stderr:
+                p.stderr.close()
         # exponential backoff for repeatedly failing cameras (10s -> 5min max)
         delay = min(300, RESTART_DELAY * (1 << fails.get(name, 0)))
         if now - restarted_at.get(name, 0) < delay:
@@ -173,13 +162,62 @@ def reconcile():
         source, threshold, skip_frame = cfg
         children[name] = subprocess.Popen(
             ffmpeg_cmd(name, source, threshold, skip_frame),
-            stdout=subprocess.DEVNULL,  # stderr inherited -> service log
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # showinfo frame lines -> watchdog liveness
         )
         running_cfg[name] = cfg
         restarted_at[name] = now
-        cpu_seen[name] = None
-        cpu_since[name] = now
+        last_frame[name] = now
         log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, retry_delay={delay}s)")
+
+
+def drain(timeout):
+    """Sleep up to `timeout` seconds while consuming child stderr.
+
+    Keeps the pipes from filling (a blocked ffmpeg would look stalled) and
+    feeds the watchdog: every `showinfo` line marks that child as alive.
+    All other output is forwarded to our own stderr (the service log).
+    """
+    fds = {}  # fileno -> camera name
+    for name, p in children.items():
+        if p.poll() is None and p.stderr:
+            fds[p.stderr.fileno()] = name
+    if not fds:
+        time.sleep(timeout)
+        return
+    bufs = {}  # fileno -> partial line
+    end = time.monotonic() + timeout
+    while fds:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            ready, _, _ = select.select(list(fds), [], [], remaining)
+        except OSError:
+            return
+        if not ready:
+            return
+        for f in ready:
+            name = fds[f]
+            try:
+                data = os.read(f, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                del fds[f]  # EOF: process exiting, reconcile() will reap it
+                tail = bufs.pop(f, b"")
+                if tail and b"showinfo" not in tail:
+                    sys.stderr.buffer.write(tail + b"\n")
+                    sys.stderr.buffer.flush()
+                continue
+            if b"showinfo" in data:
+                last_frame[name] = time.monotonic()
+            buf = bufs.get(f, b"") + data
+            *lines, bufs[f] = buf.split(b"\n")
+            fwd = b"".join(l + b"\n" for l in lines if b"showinfo" not in l)
+            if fwd:
+                sys.stderr.buffer.write(fwd)
+                sys.stderr.buffer.flush()
 
 
 def prune():
@@ -218,7 +256,7 @@ def main():
         if time.monotonic() - last_prune > 3600:
             prune()
             last_prune = time.monotonic()
-        time.sleep(POLL_INTERVAL)
+        drain(POLL_INTERVAL)
 
     for name in list(children):
         stop_child(name)

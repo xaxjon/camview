@@ -163,13 +163,13 @@ echo "motion supervisor: ok"
 
 # --- stall recovery: frozen and dead connections must be killed+restarted ---
 sleep 10   # proxy freezes at ~8s; watchdog (15s) fires at ~23-25s
-grep -q "stallcam: stalled for" "$MWORK/log.txt" \
+grep -q "stallcam: no decoded frames" "$MWORK/log.txt" \
   || { echo "FAIL: watchdog did not kill the frozen stream"; cat "$MWORK/log.txt"; exit 1; }
-grep -q "deadcam: stalled for" "$MWORK/log.txt" \
+grep -q "deadcam: no decoded frames" "$MWORK/log.txt" \
   || { echo "FAIL: watchdog did not kill the never-responding camera"; cat "$MWORK/log.txt"; exit 1; }
-grep -q "static: stalled for" "$MWORK/log.txt" \
+grep -q "static: no decoded frames" "$MWORK/log.txt" \
   && { echo "FAIL: healthy idle camera wrongly flagged as stalled"; exit 1; }
-grep -q "mov: stalled for" "$MWORK/log.txt" \
+grep -q "mov: no decoded frames" "$MWORK/log.txt" \
   && { echo "FAIL: healthy moving camera wrongly flagged as stalled"; exit 1; }
 MOV_COUNT2=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
 [ "$MOV_COUNT2" -gt "$MOV_COUNT" ] \
