@@ -262,12 +262,15 @@ def harvest():
         if not (data[:2] == b"\xff\xd8" and data[-2:] == b"\xff\xd9"):
             continue  # capturer mid-write or not started yet
         for t in triggers:
-            ts = t.name.removesuffix(".jpg")
+            ts = t.name[:-4]  # strip .jpg
             try:
                 day = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
                 int(ts.replace("-", ""))  # ts is Ymd-HMS
             except (ValueError, IndexError):
-                t.unlink(missing_ok=True)
+                try:
+                    t.unlink()
+                except OSError:
+                    pass
                 continue
             day_dir = MOTION_DIR / name / day
             day_dir.mkdir(parents=True, exist_ok=True)
@@ -280,9 +283,13 @@ def harvest():
             try:
                 tmp.write_bytes(data)
                 tmp.rename(dest)
+                log(f"{name}: captured {dest.name}")
             except OSError:
                 pass
-            t.unlink(missing_ok=True)
+            try:
+                t.unlink()
+            except OSError:
+                pass
 
 
 def drain(timeout):
@@ -293,6 +300,12 @@ def drain(timeout):
     All other output is forwarded to our own stderr (the service log).
     Wakes about once a second to harvest zone trigger frames.
     """
+    def safe_harvest():
+        try:
+            harvest()
+        except Exception as e:
+            log(f"harvest error: {e}")
+
     fds = {}  # fileno -> (camera name, role)
     for name, unit in children.items():
         for role, p in unit.items():
@@ -304,7 +317,7 @@ def drain(timeout):
         remaining = end - time.monotonic()
         if remaining <= 0:
             return
-        harvest()
+        safe_harvest()
         if not fds:
             time.sleep(min(remaining, 1.0))
             continue
