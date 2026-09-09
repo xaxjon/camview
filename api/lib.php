@@ -238,25 +238,38 @@ function apply_camera_changes(array $old, array $new): void {
     $newByName = [];
     foreach ($new as $c) $newByName[$c['name']] = $c;
 
+    // diff by camera, then expand to path names (each camera owns a public
+    // path plus a <name>__raw pull path — see gen-config.py)
     $delete = $add = [];
     foreach ($old as $c) {
         // removed entirely, or disabled (no longer in generated paths)
         if (!isset($newByName[$c['name']]) || !isset($paths[$c['name']])) $delete[] = $c['name'];
     }
-    foreach ($paths as $name => $conf) {
-        $o = $oldByName[$name] ?? null;
-        $n = $newByName[$name];
+    foreach ($new as $n) {
+        $o = $oldByName[$n['name']] ?? null;
         if (!$o || $o['source'] !== $n['source'] || $o['transcode_audio'] !== $n['transcode_audio']
             || $o['enabled'] !== $n['enabled']) {
-            $add[] = $name;  // new, or replaced via delete+add
+            $add[] = $n['name'];  // new, or replaced via delete+add
         }
     }
 
+    $delPaths = [];
     foreach (array_unique([...$delete, ...array_intersect($add, array_keys($oldByName))]) as $name) {
+        $delPaths[] = $name;
+        $delPaths[] = "{$name}__raw";
+    }
+    $addPaths = [];
+    foreach ($add as $name) {
+        foreach ([$name, "{$name}__raw"] as $p) {
+            if (isset($paths[$p])) $addPaths[] = $p;
+        }
+    }
+
+    foreach ($delPaths as $name) {
         $r = mtx_api('DELETE', '/v3/config/paths/delete/' . rawurlencode($name));
         if (!in_array($r['code'], [200, 404], true)) json_err("mediamtx delete failed for $name", 502);
     }
-    foreach ($add as $name) {
+    foreach ($addPaths as $name) {
         $r = mtx_api('POST', '/v3/config/paths/add/' . rawurlencode($name), $paths[$name]);
         if ($r['code'] !== 200) json_err("mediamtx add failed for $name", 502);
     }

@@ -145,12 +145,26 @@ EOF
 
 printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03},{"name":"zonecam","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03,"motion_zone":[0.0,0.0,0.5,0.5]},{"name":"stallcam","source":"rtsp://127.0.0.1:38554/mov","motion":true,"motion_threshold":0.03},{"name":"deadcam","source":"rtsp://127.0.0.1:38555/x","motion":true,"motion_threshold":0.03}]' \
   > "$MWORK/streams.json"
+# motion.py reads the local restream (<name>__raw) like production — register
+# those paths on the app's MediaMTX (the failure-mode proxies sit upstream)
+for spec in "mov rtsp://127.0.0.1:18554/mov" "static rtsp://127.0.0.1:18554/static" \
+            "zonecam rtsp://127.0.0.1:18554/mov" "stallcam rtsp://127.0.0.1:38554/mov" \
+            "deadcam rtsp://127.0.0.1:38555/x"; do
+  set -- $spec
+  curl -sf -X POST "http://127.0.0.1:29997/v3/config/paths/add/$1__raw" \
+    -H 'Content-Type: application/json' -d "{\"source\":\"$2\",\"sourceOnDemand\":true}" \
+    || { echo "FAIL: cannot add ${1}__raw path"; exit 1; }
+done
 cp motion.py "$MWORK/"
 ln -s "$ROOT/bin" "$MWORK/bin"
 # RTSP -timeout set high here so the watchdog (not ffmpeg's own timeout) is
 # what must catch the stall; the timeout option itself is verified below.
+# STALL_TIMEOUT=6s: mediamtx tears down a frozen upstream after ~10s and
+# reconnects, so reader-visible gaps are ~10s — the watchdog must fire
+# inside one cycle, while healthy 25fps streams tick showinfo constantly.
 MOTION_DIR="$MWORK/motion" MOTION_POLL_INTERVAL=2 \
-  MOTION_STALL_TIMEOUT=15 MOTION_TIMEOUT_US=60000000 \
+  MOTION_STALL_TIMEOUT=6 MOTION_TIMEOUT_US=60000000 \
+  MOTION_RTSP_BASE="rtsp://127.0.0.1:28554" \
   python3 "$MWORK/motion.py" > "$MWORK/log.txt" 2>&1 & PIDS+=($!)
 sleep 25
 MOV_COUNT=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
@@ -180,11 +194,15 @@ ZONE_DIMS=$(dims "$(find "$MWORK/motion/zonecam" -name 'zonecam-*.jpg' | head -1
 echo "motion zone: ok"
 
 # --- stall recovery: frozen and dead connections must be killed+restarted ---
-sleep 10   # proxy freezes at ~8s; watchdog (15s) fires at ~23-25s
+sleep 10   # proxy freezes at ~8s; watchdog (6s) fires inside the first gap
 grep -q "stallcam: no decoded frames" "$MWORK/log.txt" \
   || { echo "FAIL: watchdog did not kill the frozen stream"; cat "$MWORK/log.txt"; exit 1; }
-grep -q "deadcam: no decoded frames" "$MWORK/log.txt" \
-  || { echo "FAIL: watchdog did not kill the never-responding camera"; cat "$MWORK/log.txt"; exit 1; }
+# deadcam: its raw path never becomes ready, so ffmpeg may either be
+# watchdog-killed (held session, no data) or exit and restart — both count
+DEAD_RE=$(grep -c "deadcam exited" "$MWORK/log.txt" || true)
+if ! grep -q "deadcam: no decoded frames" "$MWORK/log.txt" && [ "$DEAD_RE" -lt 1 ]; then
+  echo "FAIL: dead camera was neither watchdog-killed nor restarted"; cat "$MWORK/log.txt"; exit 1
+fi
 grep -q "static: no decoded frames" "$MWORK/log.txt" \
   && { echo "FAIL: healthy idle camera wrongly flagged as stalled"; exit 1; }
 grep -q "mov: no decoded frames" "$MWORK/log.txt" \

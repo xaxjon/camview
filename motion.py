@@ -38,8 +38,15 @@ motion, so idle cameras are never mistaken for stalled ones. (ffmpeg's
 show up in /proc io; CPU time cannot tell "decoding" from "stuck parsing
 garbage" — decoded frames are the only signal that covers every stall mode.)
 
+All consumers share ONE upstream session per camera: the detector and
+capturer read the local MediaMTX restream path rtsp://127.0.0.1:<port>/
+<cam>__raw (managed by gen-config.py), never the camera directly — unless
+"motion_source" is set, in which case the detector still pulls the camera's
+substream itself (MediaMTX does not restream it).
+
 Env overrides (used by tests): MOTION_DIR, MOTION_RETENTION_DAYS,
-MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US.
+MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US,
+MOTION_RTSP_BASE.
 """
 import json
 import os
@@ -62,6 +69,8 @@ POLL_INTERVAL = float(os.environ.get("MOTION_POLL_INTERVAL", "30"))
 RESTART_DELAY = 10
 STALL_TIMEOUT = float(os.environ.get("MOTION_STALL_TIMEOUT", "120"))
 TIMEOUT_US = os.environ.get("MOTION_TIMEOUT_US", "15000000")  # RTSP socket I/O
+RTSP_BASE = os.environ.get("MOTION_RTSP_BASE") or \
+    f"rtsp://127.0.0.1:{os.environ.get('MTX_RTSP_PORT', '8554')}"
 
 children = {}      # name -> {"det": Popen, "cap": Popen|None} (cap = zoned only)
 running_cfg = {}   # name -> config signature of the running process
@@ -89,7 +98,12 @@ def parse_zone(z):
 
 
 def load_config():
-    """name -> (det_source, main_source, threshold, det_skip_frame, zone)."""
+    """name -> (det_source, cap_source, threshold, det_skip_frame, zone).
+
+    Sources point at the local MediaMTX restream (<name>__raw) so the camera
+    holds a single session regardless of consumers; a configured
+    motion_source substream is still pulled from the camera directly.
+    """
     try:
         data = json.loads(STREAMS.read_text())
     except Exception as e:
@@ -101,10 +115,11 @@ def load_config():
             continue
         if s.get("enabled") is False or not s.get("motion"):
             continue
+        raw = f"{RTSP_BASE}/{s['name']}__raw"
         sub = s.get("motion_source")
         out[s["name"]] = (
-            sub or s["source"],   # detector pulls the substream when set
-            s["source"],          # capturer always pulls the main stream
+            sub or raw,           # detector pulls the substream when set
+            raw,
             s.get("motion_threshold", DEFAULT_THRESHOLD),
             not sub,              # keyframe-only detection only on main stream
             parse_zone(s.get("motion_zone")),

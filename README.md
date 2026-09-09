@@ -198,8 +198,12 @@ entries in the array act as comments.
 
 ## How it works
 
-- `gen-config.py` turns `streams.json` into `mediamtx.yml`
-  (`sourceOnDemand` pull paths, or `runOnDemand` ffmpeg transcode paths).
+- `gen-config.py` turns `streams.json` into `mediamtx.yml`. Each enabled
+  camera gets a hidden `<name>__raw` pull path (the **only** upstream RTSP
+  session to the camera) plus a public `<name>` path that either restreams
+  it (`sourceOnDemand`) or runs `runOnDemand` ffmpeg audio transcode against
+  it. Viewers, the transcoder, motion detection and snapshots all read the
+  local restream, so a fragile camera never holds more than one session.
 - The PHP API (`api/`) handles auth (PHP sessions + bcrypt in
   `users.json`), camera CRUD, and live-applies path changes through the
   MediaMTX control API — no restarts needed for camera edits.

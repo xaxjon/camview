@@ -14,7 +14,11 @@ function find_camera(string $name): ?array {
     return null;
 }
 
-function grab_frame(string $source): ?string {
+function grab_frame(string $name): ?string {
+    // read the local restream (<name>__raw): the camera holds one session
+    // no matter how many consumers — see gen-config.py
+    $port = getenv('MTX_RTSP_PORT') ?: '8554';
+    $source = "rtsp://127.0.0.1:$port/{$name}__raw";
     $ffmpeg = CAMVIEW_ROOT . '/bin/ffmpeg';
     if (!is_executable($ffmpeg)) json_err('bin/ffmpeg not found — run ./setup.sh', 500);
     $cmd = 'timeout 12 ' . escapeshellarg($ffmpeg)
@@ -29,7 +33,7 @@ function grab_frame(string $source): ?string {
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $cam = find_camera((string) ($_GET['name'] ?? ''));
     if (!$cam) json_err('camera not found', 404);
-    $jpeg = grab_frame($cam['source']);
+    $jpeg = grab_frame($cam['name']);
     if (!$jpeg) json_err('could not grab a frame (camera offline?)', 502);
     header('Content-Type: image/jpeg');
     header('Cache-Control: no-store');
@@ -41,7 +45,7 @@ check_csrf();
 
 $cam = find_camera((string) (body()['name'] ?? ''));
 if (!$cam) json_err('camera not found', 404);
-$jpeg = grab_frame($cam['source']);
+$jpeg = grab_frame($cam['name']);
 if (!$jpeg) json_err('could not grab a frame (camera offline?)', 502);
 
 $path = snapshot_path($cam['name']);
