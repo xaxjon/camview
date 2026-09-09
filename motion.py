@@ -128,7 +128,7 @@ def load_config():
 
 
 def base_cmd(source, skip_frame):
-    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "info",
+    cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "info", "-nostats",
            "-timeout", TIMEOUT_US, "-rtsp_transport", "tcp"]
     if skip_frame:
         cmd += ["-skip_frame", "nokey"]

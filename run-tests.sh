@@ -19,7 +19,7 @@ trap cleanup EXIT
 # --- scratch app copy (binaries symlinked) ---
 rm -rf "$WORK" "$MWORK"
 mkdir -p "$WORK"
-cp -r api *.html gen-config.py transcode.py motion.py streams.json.example "$WORK/"
+cp -r api *.html gen-config.py transcode.py sanitize.py motion.py streams.json.example "$WORK/"
 ln -s "$ROOT/bin" "$WORK/bin"
 cp streams.json.example "$WORK/streams.json"
 
@@ -146,13 +146,15 @@ EOF
 printf '[{"name":"mov","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03},{"name":"static","source":"rtsp://127.0.0.1:18554/static","motion":true,"motion_threshold":0.03},{"name":"zonecam","source":"rtsp://127.0.0.1:18554/mov","motion":true,"motion_threshold":0.03,"motion_zone":[0.0,0.0,0.5,0.5]},{"name":"stallcam","source":"rtsp://127.0.0.1:38554/mov","motion":true,"motion_threshold":0.03},{"name":"deadcam","source":"rtsp://127.0.0.1:38555/x","motion":true,"motion_threshold":0.03}]' \
   > "$MWORK/streams.json"
 # motion.py reads the local restream (<name>__raw) like production — register
-# those paths on the app's MediaMTX (the failure-mode proxies sit upstream)
+# those paths on the app's MediaMTX, each behind the sanitize wrapper with
+# the failure-mode proxies upstream
 for spec in "mov rtsp://127.0.0.1:18554/mov" "static rtsp://127.0.0.1:18554/static" \
             "zonecam rtsp://127.0.0.1:18554/mov" "stallcam rtsp://127.0.0.1:38554/mov" \
             "deadcam rtsp://127.0.0.1:38555/x"; do
   set -- $spec
   curl -sf -X POST "http://127.0.0.1:29997/v3/config/paths/add/$1__raw" \
-    -H 'Content-Type: application/json' -d "{\"source\":\"$2\",\"sourceOnDemand\":true,\"rtspTransport\":\"tcp\"}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"runOnDemand\":\"python3 $WORK/sanitize.py $2 rtsp://127.0.0.1:28554/$1__raw\",\"runOnDemandRestart\":true,\"runOnDemandCloseAfter\":\"10s\"}" \
     || { echo "FAIL: cannot add ${1}__raw path"; exit 1; }
 done
 cp motion.py "$MWORK/"

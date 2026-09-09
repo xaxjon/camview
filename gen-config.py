@@ -3,11 +3,14 @@
 
 Every enabled camera gets TWO paths:
 
-  <name>__raw   pulls the camera (sourceOnDemand). This is the ONLY
-                upstream session to the camera — every consumer (viewers,
-                transcoder, motion detector/capturer, snapshots) reads the
-                local restream, so even the flakiest camera sees a single
-                RTSP session no matter what is watching.
+  <name>__raw   the ONLY upstream session to the camera: a runOnDemand
+                sanitize.py wrapper (ffmpeg -c copy, TCP). ffmpeg tolerates
+                the malformed RTP that weak-WiFi cameras emit — MediaMTX's
+                strict pull source would stop and tear down every reader of
+                the path at once. Every consumer (viewers, transcoder,
+                motion detector/capturer, snapshots) reads the local
+                restream, so the camera sees a single session no matter what
+                is watching.
 
   <name>        the public path viewers connect to:
       { "name": "cam1", "source": "rtsp://..." }
@@ -58,13 +61,14 @@ paths:
 {paths}
 """
 
-# transcode.py wraps ffmpeg with a stall watchdog: an ffmpeg blocked in a
-# network read ignores MediaMTX's SIGINT and leaks (frozen camera, WiFi
-# drop). The wrapper kills it after 20s without progress.
+# transcode.py and sanitize.py wrap ffmpeg with a stall watchdog: an ffmpeg
+# blocked in a network read ignores MediaMTX's SIGINT and leaks (frozen
+# camera, WiFi drop). The wrapper kills it after 20s without CPU activity.
 TRANSCODE_CMD = (
     PYTHON + " {wrapper} {source} "
     "rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
 )
+SANITIZE_CMD = TRANSCODE_CMD  # same shape: wrapper, input, $RTSP_PORT/$MTX_PATH
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -100,10 +104,24 @@ def main():
             sys.exit(f"{name}: source must be an rtsp:// URL")
 
         raw = f"rtsp://127.0.0.1:{RTSP_PORT}/{name}__raw"
-        # the single upstream session to the camera — TCP only: UDP over
-        # weak WiFi loses packets and the reconnect flap drops every reader
-        lines.append(f"  {name}__raw:\n    source: {source}\n    sourceOnDemand: yes\n    rtspTransport: tcp")
-        confs[f"{name}__raw"] = {"source": source, "sourceOnDemand": True, "rtspTransport": "tcp"}
+        # the single upstream session to the camera, through sanitize.py:
+        # ffmpeg tolerates the malformed RTP that weak-WiFi cameras emit,
+        # where MediaMTX's strict pull source would stop and tear down
+        # every reader of the path at once
+        if not FFMPEG.exists():
+            sys.exit(f"{name}: sanitize wrapper needs {FFMPEG} — run ./setup.sh first")
+        rcmd = SANITIZE_CMD.format(wrapper=ROOT / "sanitize.py", source=source)
+        lines.append(
+            f"  {name}__raw:\n"
+            f"    runOnDemand: {rcmd}\n"
+            f"    runOnDemandRestart: yes\n"
+            f"    runOnDemandCloseAfter: 10s"
+        )
+        confs[f"{name}__raw"] = {
+            "runOnDemand": rcmd,
+            "runOnDemandRestart": True,
+            "runOnDemandCloseAfter": "10s",
+        }
 
         if s.get("transcode_audio"):
             if not FFMPEG.exists():
