@@ -100,9 +100,10 @@ def main():
             sys.exit(f"{name}: source must be an rtsp:// URL")
 
         raw = f"rtsp://127.0.0.1:{RTSP_PORT}/{name}__raw"
-        # the single upstream session to the camera
-        lines.append(f"  {name}__raw:\n    source: {source}\n    sourceOnDemand: yes")
-        confs[f"{name}__raw"] = {"source": source, "sourceOnDemand": True}
+        # the single upstream session to the camera — TCP only: UDP over
+        # weak WiFi loses packets and the reconnect flap drops every reader
+        lines.append(f"  {name}__raw:\n    source: {source}\n    sourceOnDemand: yes\n    rtspTransport: tcp")
+        confs[f"{name}__raw"] = {"source": source, "sourceOnDemand": True, "rtspTransport": "tcp"}
 
         if s.get("transcode_audio"):
             if not FFMPEG.exists():

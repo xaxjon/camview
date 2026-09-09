@@ -152,7 +152,7 @@ for spec in "mov rtsp://127.0.0.1:18554/mov" "static rtsp://127.0.0.1:18554/stat
             "deadcam rtsp://127.0.0.1:38555/x"; do
   set -- $spec
   curl -sf -X POST "http://127.0.0.1:29997/v3/config/paths/add/$1__raw" \
-    -H 'Content-Type: application/json' -d "{\"source\":\"$2\",\"sourceOnDemand\":true}" \
+    -H 'Content-Type: application/json' -d "{\"source\":\"$2\",\"sourceOnDemand\":true,\"rtspTransport\":\"tcp\"}" \
     || { echo "FAIL: cannot add ${1}__raw path"; exit 1; }
 done
 cp motion.py "$MWORK/"
