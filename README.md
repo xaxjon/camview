@@ -117,9 +117,9 @@ at the camera's low-res substream:
 
 To watch only part of the frame, draw a **motion zone** (ZONE button on the
 Cameras page) or set `"motion_zone": [x, y, w, h]` as 0–1 fractions of the
-frame — the detector crops to that rectangle before scene scoring, so
-movement outside the zone never triggers. The ZONE button is red while a
-zone is active, green otherwise.
+frame — only movement inside the rectangle triggers capture, but the saved
+JPEG is always the full frame. The ZONE button is red while a zone is
+active, green otherwise.
 
 Detection uses ffmpeg's scene score (frame-to-frame difference, 0–1);
 default threshold is **0.05**, adjustable per camera with

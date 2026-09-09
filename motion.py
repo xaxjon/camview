@@ -14,7 +14,8 @@ Per-camera options in streams.json:
     "motion_source": "rtsp://.../ch1"  low-res substream for near-zero CPU
                               (keeps 1fps granularity; skips keyframe-only mode)
     "motion_zone": [x,y,w,h]  normalized 0..1 fractions of the frame; only
-                              motion inside the rectangle triggers capture
+                              motion inside the rectangle triggers capture,
+                              but the captured JPEG is always the full frame
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
 exit on its own, and the supervisor watches each child's *decoded-frame*
@@ -101,26 +102,33 @@ def load_config():
 
 
 def ffmpeg_cmd(name, source, threshold, skip_frame, zone):
-    filters = []
-    if zone:
-        x, y, w, h = zone
-        # crop before scaling: fewer pixels to scale, resolution-independent
-        filters.append(
-            f"crop=max(floor(iw*{w:.6f}/2)*2\\,2):max(floor(ih*{h:.6f}/2)*2\\,2)"
-            f":floor(iw*{x:.6f}/2)*2:floor(ih*{y:.6f}/2)*2"
-        )
-    # showinfo logs one stderr line per decoded frame -> the supervisor's
-    # liveness signal; it sits before select so it sees every frame,
-    # not just motion frames
-    filters.append(f"scale=480:-1,showinfo,select='gt(scene,{threshold})'")
-    vf = ",".join(filters)
     cmd = [str(FFMPEG), "-hide_banner", "-loglevel", "info",
            "-timeout", TIMEOUT_US, "-rtsp_transport", "tcp"]
     if skip_frame:
         cmd += ["-skip_frame", "nokey"]
+    cmd += ["-i", source]
+    if zone:
+        x, y, w, h = zone
+        # Detection runs on the cropped zone; the trigger frames are padded
+        # back to full-canvas size and a framesync'd overlay lays the
+        # untouched full-res branch on top — so the gate (select) follows
+        # the zone, but the saved JPEG is the full frame at the exact
+        # trigger timestamp. showinfo (before split) feeds the watchdog.
+        crop = (f"crop=max(floor(iw*{w:.6f}/2)*2\\,2):max(floor(ih*{h:.6f}/2)*2\\,2)"
+                f":floor(iw*{x:.6f}/2)*2:floor(ih*{y:.6f}/2)*2")
+        pad = (f"pad=floor(iw/{w:.6f}):floor(ih/{h:.6f})"
+               f":floor(-iw*{x:.6f}/{w:.6f}):floor(-ih*{y:.6f}/{h:.6f}):black")
+        fc = (f"[0:v]scale=480:-1,showinfo,split=2[full][det];"
+              f"[det]{crop},select='gt(scene,{threshold})',{pad}[trig];"
+              f"[trig][full]overlay=0:0:repeatlast=0[out]")
+        cmd += ["-filter_complex", fc, "-map", "[out]"]
+    else:
+        # showinfo logs one stderr line per decoded frame -> the supervisor's
+        # liveness signal; it sits before select so it sees every frame,
+        # not just motion frames
+        cmd += ["-vf", f"scale=480:-1,showinfo,select='gt(scene,{threshold})'"]
     cmd += [
-        "-i", source,
-        "-vf", vf, "-vsync", "vfr", "-strftime", "1",
+        "-vsync", "vfr", "-strftime", "1",
         str(MOTION_DIR / name / "%Y-%m-%d" / f"{name}-%Y%m%d-%H%M%S.jpg"),
     ]
     return cmd
