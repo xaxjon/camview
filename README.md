@@ -121,6 +121,13 @@ frame — only movement inside the rectangle triggers capture, but the saved
 JPEG is always the full frame. The ZONE button is red while a zone is
 active, green otherwise.
 
+Zoned cameras run a second keyframe-only ffmpeg (the *capturer*) that keeps
+`motion/<cam>/.latest.jpg` fresh; the detector writes trigger frames to
+`motion/<cam>/.trig/` and the supervisor copies the latest full frame into
+the timeline under each trigger timestamp (~1s latency, ≤ one keyframe
+interval of staleness). Cost per zoned camera: one extra keyframe-only
+pull of the main stream.
+
 Detection uses ffmpeg's scene score (frame-to-frame difference, 0–1);
 default threshold is **0.05**, adjustable per camera with
 `"motion_threshold"` (higher = less sensitive). Tune on real footage:

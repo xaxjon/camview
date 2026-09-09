@@ -161,16 +161,20 @@ if [ "$STATIC_COUNT" -gt 0 ]; then echo "FAIL: static camera produced jpegs"; ex
 [ -f "$MWORK/motion/.htaccess" ] || { echo "FAIL: motion .htaccess missing"; exit 1; }
 echo "motion supervisor: ok"
 
-# --- zone camera: crop-gated detection, full-frame capture ---
+# --- zone camera: crop-gated detection, full-frame capture via capturer ---
 pgrep -af 'motion/zonecam' | grep -q 'crop=' \
-  || { echo "FAIL: zonecam ffmpeg has no crop filter"; pgrep -af 'motion/zonecam'; exit 1; }
-ZONE_COUNT=$(find "$MWORK/motion/zonecam" -name '*.jpg' 2>/dev/null | wc -l)
-[ "$ZONE_COUNT" -ge 1 ] || { echo "FAIL: zonecam produced no jpegs"; exit 1; }
+  || { echo "FAIL: zonecam detector has no crop filter"; pgrep -af 'motion/zonecam'; exit 1; }
+pgrep -af 'latest.jpg' | grep -q 'update 1' \
+  || { echo "FAIL: zonecam capturer missing"; pgrep -af 'motion/zonecam'; exit 1; }
+ZONE_COUNT=$(find "$MWORK/motion/zonecam" -name 'zonecam-*.jpg' 2>/dev/null | wc -l)
+[ "$ZONE_COUNT" -ge 1 ] || { echo "FAIL: zonecam produced no timeline jpegs"; ls -la "$MWORK/motion/zonecam" "$MWORK/motion/zonecam/.trig" 2>/dev/null; exit 1; }
+TRIG_LEFT=$(find "$MWORK/motion/zonecam/.trig" -name '*.jpg' 2>/dev/null | wc -l)
+[ "$TRIG_LEFT" -le 2 ] || { echo "FAIL: trigger frames not harvested ($TRIG_LEFT left)"; exit 1; }
 grep -q "started zonecam (threshold=0.03, skip_frame=True, zone=(0.0, 0.0, 0.5, 0.5)" "$MWORK/log.txt" \
   || { echo "FAIL: zonecam not started with its zone"; grep zonecam "$MWORK/log.txt"; exit 1; }
 dims() { ./bin/ffmpeg -i "$1" -f null - 2>&1 | grep -m1 'Stream.*Video' | grep -o '[0-9]\{2,\}x[0-9]\{2,\}' | head -1; }
-MOV_DIMS=$(dims "$(find "$MWORK/motion/mov" -name '*.jpg' | head -1)")
-ZONE_DIMS=$(dims "$(find "$MWORK/motion/zonecam" -name '*.jpg' | head -1)")
+MOV_DIMS=$(dims "$(find "$MWORK/motion/mov" -name 'mov-*.jpg' | head -1)")
+ZONE_DIMS=$(dims "$(find "$MWORK/motion/zonecam" -name 'zonecam-*.jpg' | head -1)")
 [ -n "$MOV_DIMS" ] && [ "$MOV_DIMS" = "$ZONE_DIMS" ] \
   || { echo "FAIL: zone capture is not full frame ($ZONE_DIMS vs $MOV_DIMS)"; exit 1; }
 echo "motion zone: ok"
@@ -189,6 +193,17 @@ MOV_COUNT2=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
 [ "$MOV_COUNT2" -gt "$MOV_COUNT" ] \
   || { echo "FAIL: healthy camera stopped producing while stalls were handled"; exit 1; }
 echo "motion stall recovery: ok"
+
+# --- zone long-run: both zone processes must stay alive and the capturer
+# must keep refreshing (the ffmpeg7 overlay/two-input graphs wedged ~60s in;
+# the detector+capturer pair must not) ---
+L1=$(stat -c %Y "$MWORK/motion/zonecam/.latest.jpg" 2>/dev/null || echo 0)
+sleep 30
+L2=$(stat -c %Y "$MWORK/motion/zonecam/.latest.jpg" 2>/dev/null || echo 0)
+[ "$L2" -gt "$L1" ] || { echo "FAIL: zonecam capturer stopped refreshing"; exit 1; }
+NPROCS=$(pgrep -cf 'motion/zonecam')
+[ "$NPROCS" -ge 2 ] || { echo "FAIL: zonecam processes missing ($NPROCS)"; pgrep -af 'motion/zonecam'; exit 1; }
+echo "zone long-run: ok"
 
 # --- RTSP -timeout: ffmpeg must error out of a silent socket on its own ---
 RW_START=$(date +%s)
