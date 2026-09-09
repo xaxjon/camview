@@ -130,7 +130,10 @@ def detector_cmd(name, source, threshold, skip_frame, zone):
         x, y, w, h = zone
         crop = (f"crop=max(floor(iw*{w:.6f}/2)*2\\,2):max(floor(ih*{h:.6f}/2)*2\\,2)"
                 f":floor(iw*{x:.6f}/2)*2:floor(ih*{y:.6f}/2)*2")
-        vf = f"scale=480:-1,{crop},showinfo,select='gt(scene,{threshold})'"
+        # crop BEFORE scale: fewer pixels to scale, and scale hands select a
+        # freshly allocated buffer — scale->crop->select segfaults (GPF in a
+        # filtergraph worker) on real 1080p yuvj420p cameras with ffmpeg 7.0.2
+        vf = f"{crop},scale=480:-1,showinfo,select='gt(scene,{threshold})'"
         out = str(MOTION_DIR / name / ".trig" / "%Y%m%d-%H%M%S.jpg")
     return base_cmd(source, skip_frame) + [
         "-vf", vf, "-vsync", "vfr", "-strftime", "1", out,
