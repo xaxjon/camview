@@ -2,8 +2,10 @@
 """API-level test for camview backend (setup, auth, CRUD, test, snapshot, users)."""
 import json
 import os
+import datetime
 import pathlib
 import re
+import time
 import urllib.request
 import urllib.parse
 import http.cookiejar
@@ -110,6 +112,16 @@ if mfiles:
     check("motion jpeg served", s == 200 and data[:2] == b"\xff\xd8", s)
 s, j = api("motion.php?file=..%2f..%2fstreams.json")
 check("motion path traversal rejected", s in (400, 404), s)
+s, j = api("motion.php?latest=1")
+exp = max(ts for ts, _ in mfiles)
+check("latest endpoint returns newest event", s == 200 and j.get("latest", {}).get("testcam") == exp, j)
+now_ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+ddir = pathlib.Path("/tmp/camview-test/motion/testcam") / datetime.date.today().isoformat()
+ddir.mkdir(parents=True, exist_ok=True)
+(ddir / f"testcam-{now_ts}.jpg").write_bytes(b"\xff\xd8x")
+exp2 = int(datetime.datetime.strptime(now_ts, "%Y%m%d-%H%M%S").timestamp())
+s, j = api("motion.php?latest=1")
+check("latest tracks a fresh capture", j.get("latest", {}).get("testcam") == exp2, j)
 
 print("== camera test endpoint ==")
 s, j = api("camera-test.php", "POST", {"source": "rtsp://127.0.0.1:18554/test"}, csrf)
@@ -176,8 +188,6 @@ s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
 api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))
 
 print("== system page API ==")
-import datetime
-import time
 s, j = api("system.php", "POST", {}, csrf)
 check("purge without CSRF rejected", s == 403)
 s, j = api("login.php", "POST", {"username": "bob", "password": "viewerpass1"})

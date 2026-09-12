@@ -49,6 +49,10 @@
   .tile .btn:hover { background: rgba(60,60,60,.8); }
   .tile .mute { right: 6px; bottom: 6px; }
   .tile .snap { right: 40px; bottom: 6px; }
+  .tile .bell { right: 74px; bottom: 6px; }
+  .tile .bell.on { background: #2d6cdf; color: #fff; }
+  .tile.alarmed { outline: 4px solid #f52313; outline-offset: -4px;
+    box-shadow: 0 0 18px rgba(245,35,19,.8); }
 
   .tile .toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
     padding: 4px 12px; background: rgba(20,80,30,.9); border-radius: 4px;
@@ -280,6 +284,56 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// ---------- motion alarm (bell widget) ----------
+
+let audioCtx = null;
+function chime() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+    const t0 = audioCtx.currentTime;
+    [880, 660].forEach((f, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = f;
+      o.type = 'sine';
+      g.gain.setValueAtTime(0.25, t0 + i * 0.18);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.18 + 0.2);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t0 + i * 0.18);
+      o.stop(t0 + i * 0.18 + 0.2);
+    });
+  } catch { /* audio unavailable — the red frame still shows */ }
+}
+
+const bellOn = name => localStorage.getItem('camview_bell_' + name) === '1';
+const lastSeen = {};    // cam -> newest motion event ts we've alarmed on
+let alarmPrimed = false;  // first poll only records; never alarms on old events
+
+async function pollMotion() {
+  if (![...streamCtls.keys()].some(bellOn)) {
+    alarmPrimed = false;
+    grid.querySelectorAll('.tile.alarmed').forEach(t => t.classList.remove('alarmed'));
+    return;
+  }
+  try {
+    const j = await (await fetch('api/motion.php?latest=1', { cache: 'no-store' })).json();
+    const latest = j.latest || {};
+    const now = Date.now() / 1000;
+    for (const name of streamCtls.keys()) {
+      const tile = grid.querySelector(`.tile[data-name="${CSS.escape(name)}"]`);
+      if (!tile) continue;
+      if (!bellOn(name)) { tile.classList.remove('alarmed'); continue; }
+      const ts = latest[name];
+      const prev = lastSeen[name];
+      lastSeen[name] = ts;
+      if (ts && alarmPrimed && (prev === undefined || ts > prev)) chime();
+      tile.classList.toggle('alarmed', !!ts && now - ts < 6);
+    }
+    alarmPrimed = true;
+  } catch { /* keep last state */ }
+}
+setInterval(() => { if (document.visibilityState === 'visible') pollMotion(); }, 2000);
+
 // ---------- UI ----------
 
 function makeTile(stream) {
@@ -336,7 +390,25 @@ function makeTile(stream) {
   });
   snap.addEventListener('dblclick', e => e.stopPropagation());
 
-  tile.append(video, label, dot, status, mute, snap);
+  const bell = document.createElement('button');
+  bell.className = 'btn bell';
+  bell.title = 'Motion alarm: chime + red frame on motion';
+  if (!stream.motion) bell.hidden = true;
+  const setBell = on => {
+    bell.classList.toggle('on', on);
+    bell.textContent = on ? '🔔' : '🔕';
+    localStorage.setItem('camview_bell_' + stream.name, on ? '1' : '0');
+  };
+  setBell(bellOn(stream.name));
+  bell.addEventListener('click', e => {
+    e.stopPropagation();
+    const on = !bell.classList.contains('on');
+    setBell(on);
+    if (on) chime();  // audible confirmation + unlocks audio (user gesture)
+  });
+  bell.addEventListener('dblclick', e => e.stopPropagation());
+
+  tile.append(video, label, dot, status, mute, snap, bell);
 
   // single click -> fullscreen, double click -> back to grid
   tile.addEventListener('click', () => {

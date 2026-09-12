@@ -15,6 +15,7 @@ if ($method === 'GET') {
         $row = [
             'name' => $c['name'],
             'enabled' => $c['enabled'],
+            'motion' => $c['motion'],  // viewer needs it for the alarm bell
             'status' => $c['enabled'] ? ($status[$c['name']] ?? 'standby') : 'disabled',
         ];
         if ($isAdmin) {

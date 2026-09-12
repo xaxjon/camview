@@ -10,6 +10,28 @@ const MOTION_FILE_RE = '/^([a-zA-Z0-9_-]+)\/(\d{4}-\d{2}-\d{2})\/([a-zA-Z0-9_-]+
 
 require_login();
 
+// ?latest=1 -> {"latest": {cam: unix-ts-of-newest-capture}} for the viewer's
+// motion alarm; cheap: filenames are timestamps, so max() by name suffices.
+if (isset($_GET['latest'])) {
+    $out = [];
+    $days = [date('Y-m-d'), date('Y-m-d', strtotime('yesterday'))];
+    foreach (load_cameras() as $c) {
+        if (!$c['enabled'] || !$c['motion']) continue;
+        $best = null;
+        foreach ($days as $day) {
+            $files = glob(MOTION_DIR . "/{$c['name']}/$day/{$c['name']}-*.jpg") ?: [];
+            if ($files) {
+                $b = max($files);
+                if ($best === null || $b > $best) $best = $b;
+            }
+        }
+        if ($best && preg_match('/-(\d{8})-(\d{6})(-\d+)?\.jpg$/', $best, $m)) {
+            $out[$c['name']] = DateTime::createFromFormat('Ymd-His', "$m[1]-$m[2]")->getTimestamp();
+        }
+    }
+    json_out(['latest' => $out]);
+}
+
 if (isset($_GET['file'])) {
     $rel = (string) $_GET['file'];
     if (!preg_match(MOTION_FILE_RE, $rel)) json_err('invalid file', 400);

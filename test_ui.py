@@ -6,8 +6,10 @@ a fresh install (no users.json), and the fake AAC camera publishing at
 rtsp://127.0.0.1:18554/test.
 """
 import asyncio
+import datetime
 import json
 import os
+import pathlib
 import subprocess
 import time
 import urllib.request
@@ -421,6 +423,36 @@ async def main():
                 break
             await asyncio.sleep(1)
         check("visible: streams resume", bool(resumed), resumed)
+
+        print("== motion alarm bell ==")
+        check("bell present on motion camera tile", await js(
+            "!!document.querySelector('.tile[data-name=testcam] .bell')"))
+        await js("document.querySelector('.tile[data-name=testcam] .bell').click()")
+        await asyncio.sleep(0.3)
+        check("bell toggles on", await js(
+            "document.querySelector('.tile[data-name=testcam] .bell').classList.contains('on')"))
+        check("bell state persisted", await js("localStorage.getItem('camview_bell_testcam')") == "1")
+        # a fresh motion capture -> red frame within a poll cycle
+        daydir = pathlib.Path("/tmp/camview-test/motion/testcam") / datetime.date.today().isoformat()
+        daydir.mkdir(parents=True, exist_ok=True)
+        (daydir / f"testcam-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jpg").write_bytes(b"\xff\xd8x")
+        alarmed = False
+        for _ in range(8):
+            await asyncio.sleep(1)
+            alarmed = await js("document.querySelector('.tile[data-name=testcam]').classList.contains('alarmed')")
+            if alarmed:
+                break
+        check("motion event raises red frame", bool(alarmed), alarmed)
+        # bell off -> frame clears and new events stay quiet
+        await js("document.querySelector('.tile[data-name=testcam] .bell').click()")
+        (daydir / f"testcam-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jpg").write_bytes(b"\xff\xd8y")
+        cleared = False
+        for _ in range(8):
+            await asyncio.sleep(1)
+            cleared = await js("!document.querySelector('.tile[data-name=testcam]').classList.contains('alarmed')")
+            if cleared:
+                break
+        check("bell off clears the alarm", bool(cleared), cleared)
 
         print("== disable hides camera from grid ==")
         await nav("admin.html")
