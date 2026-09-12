@@ -192,13 +192,31 @@ function untilDead(pc) {
   });
 }
 
-async function runStream(name, video, status) {
+// Per-tile lifecycle controller: lets the page suspend all streaming when
+// hidden (mobile browsers freeze timers, so dead connections were only
+// noticed on reload) and resume cleanly on return.
+const streamCtls = new Map();  // name -> {active, video, status, stop, wake}
+
+function stopStream(name) {
+  const ctl = streamCtls.get(name);
+  if (!ctl) return;
+  ctl.active = false;
+  if (ctl.wake) ctl.wake();
+  const pc = peers.get(name);
+  if (pc) { try { pc.close(); } catch {} }
+  peers.delete(name);
+  ctl.video.srcObject = null;
+}
+
+async function runStream(name, ctl) {
+  const { video, status } = ctl;
   let attempt = 0;
 
   // stall watchdog: if the picture stops advancing, the connection is
   // effectively dead even if ICE still looks fine — force a reconnect.
   let lastTime = -1, lastProgress = Date.now();
   const watchdog = setInterval(() => {
+    if (!ctl.active) { clearInterval(watchdog); return; }
     const pc = peers.get(name);
     if (!pc) return;
     if (video.currentTime !== lastTime) {
@@ -212,12 +230,15 @@ async function runStream(name, video, status) {
       pc.close();
     }
   }, 2000);
+  ctl.stop = () => { clearInterval(watchdog); stopStream(name); };
 
   for (;;) {
+    if (!ctl.active) break;
     try {
       status.textContent = attempt ? 'reconnecting…' : 'connecting…';
       status.hidden = false;
       const pc = await connect(name, video);
+      if (!ctl.active) { pc.close(); break; }  // suspended mid-handshake
       attempt = 0;
       lastTime = -1;
       lastProgress = Date.now();
@@ -226,6 +247,7 @@ async function runStream(name, video, status) {
     } catch (err) {
       console.warn(name, err);
     }
+    if (!ctl.active) break;
     const pc = peers.get(name);
     if (pc) { try { pc.close(); } catch {} }
     peers.delete(name);
@@ -234,9 +256,29 @@ async function runStream(name, video, status) {
     const wait = Math.min(30000, 2000 * attempt);
     status.textContent = `offline — retrying in ${Math.round(wait / 1000)}s…`;
     status.hidden = false;
-    await new Promise(r => setTimeout(r, wait));
+    await new Promise(r => { ctl.wake = r; setTimeout(r, wait); });
   }
 }
+
+// Stop all streaming while the page is hidden — no decode, no network, and
+// the server stops pulling idle cameras — then reconnect on return.
+let suspended = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    suspended = true;
+    for (const name of streamCtls.keys()) {
+      stopStream(name);
+      const st = grid.querySelector(`.tile[data-name="${CSS.escape(name)}"] .status`);
+      if (st) { st.textContent = 'paused'; st.hidden = false; }
+    }
+  } else if (suspended) {
+    suspended = false;
+    for (const [name, ctl] of streamCtls) {
+      if (!ctl.active) { ctl.active = true; runStream(name, ctl); }
+    }
+    refreshDots();
+  }
+});
 
 // ---------- UI ----------
 
@@ -305,7 +347,9 @@ function makeTile(stream) {
   });
 
   grid.appendChild(tile);
-  runStream(stream.name, video, status);
+  const ctl = { active: true, video, status, stop: null, wake: null };
+  streamCtls.set(stream.name, ctl);
+  runStream(stream.name, ctl);
 }
 
 function toast(tile, msg, isErr) {
@@ -363,7 +407,8 @@ async function init() {
   streams.forEach(makeTile);
   layout();
   refreshDots();
-  setInterval(refreshDots, 15000);
+  // skip polling while hidden — the page resumes it via visibilitychange
+  setInterval(() => { if (document.visibilityState === 'visible') refreshDots(); }, 15000);
 }
 
 window.addEventListener('beforeunload', () => peers.forEach(pc => pc.close()));

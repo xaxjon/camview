@@ -22,6 +22,8 @@ mkdir -p "$WORK"
 cp -r api *.html gen-config.py transcode.py sanitize.py motion.py streams.json.example "$WORK/"
 ln -s "$ROOT/bin" "$WORK/bin"
 cp streams.json.example "$WORK/streams.json"
+# the viewer hardcodes WHEP port 8889; the test MediaMTX uses 28889
+sed -i 's/location\.hostname}:8889/location.hostname}:28889/' "$WORK/index.html"
 
 # --- scratch MediaMTX instances ---
 cat > /tmp/mtx-test-camera.yml << 'EOF'   # hosts the fake cameras (publisher mode)

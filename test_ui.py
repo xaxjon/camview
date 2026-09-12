@@ -373,6 +373,33 @@ async def main():
             "[...document.querySelectorAll('#grid .card b')].map(b => b.textContent)")) == ["testcam"])
         check("purge button visible to admin", await js("!document.getElementById('purge').hidden"))
 
+        print("== page visibility suspend/resume ==")
+        await nav("index.html")
+        streaming = False
+        for _ in range(20):
+            streaming = await js("peers.size > 0 && [...document.querySelectorAll('.tile video')].some(v => v.srcObject)")
+            if streaming:
+                break
+            await asyncio.sleep(1)
+        check("tiles streaming before hide", bool(streaming), streaming)
+        await js("""Object.defineProperty(document, 'visibilityState', {get: () => 'hidden', configurable: true});
+                    document.dispatchEvent(new Event('visibilitychange'))""")
+        await asyncio.sleep(1)
+        check("hidden: peers torn down", await js("peers.size") == 0)
+        check("hidden: videos detached",
+              await js("[...document.querySelectorAll('.tile video')].every(v => !v.srcObject)"))
+        check("hidden: tiles show paused",
+              await js("[...document.querySelectorAll('.tile .status')].some(s => s.textContent === 'paused')"))
+        await js("""Object.defineProperty(document, 'visibilityState', {get: () => 'visible', configurable: true});
+                    document.dispatchEvent(new Event('visibilitychange'))""")
+        resumed = False
+        for _ in range(20):
+            resumed = await js("peers.size > 0 && [...document.querySelectorAll('.tile video')].some(v => v.srcObject)")
+            if resumed:
+                break
+            await asyncio.sleep(1)
+        check("visible: streams resume", bool(resumed), resumed)
+
         print("== disable hides camera from grid ==")
         await nav("admin.html")
         for _ in range(10):
