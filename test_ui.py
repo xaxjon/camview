@@ -395,6 +395,43 @@ async def main():
                 break
         check("disabled camera hidden from viewer", n2 == "2 @ /index.html", n2)
 
+        print("== mobile layout ==")
+        await send("Emulation.setDeviceMetricsOverride",
+                   {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True})
+        await nav("index.html")
+        await asyncio.sleep(2)
+        t = await js("""(function(){
+          const ts = [...document.querySelectorAll('.tile')];
+          if (ts.length < 2) return null;
+          const a = ts[0].getBoundingClientRect(), b = ts[1].getBoundingClientRect();
+          return {w: Math.round(a.width), iw: window.innerWidth, stacked: b.top > a.top + 10};
+        })()""")
+        check("mobile: tiles full width", isinstance(t, dict) and t["w"] >= t["iw"] - 24, t)
+        check("mobile: tiles stacked vertically", isinstance(t, dict) and t["stacked"] is True, t)
+        check("mobile: burger visible",
+              await js("getComputedStyle(document.getElementById('burger')).display") != "none")
+        check("mobile: menu hidden initially",
+              await js("getComputedStyle(document.getElementById('menu')).display") == "none")
+        await js("document.getElementById('burger').click()")
+        await asyncio.sleep(0.3)
+        check("mobile: burger opens menu",
+              await js("document.getElementById('menu').classList.contains('open')"))
+        await js("document.getElementById('burger').click()")
+        await asyncio.sleep(0.3)
+        check("mobile: burger closes menu",
+              await js("!document.getElementById('menu').classList.contains('open')"))
+        await nav("motion.html")
+        await asyncio.sleep(2)
+        namew = await js("document.querySelector('.lane .name')?.getBoundingClientRect().width")
+        check("mobile: motion lane name compact", namew == 96, namew)
+        check("mobile: motion burger visible",
+              await js("getComputedStyle(document.getElementById('burger')).display") != "none")
+        await send("Emulation.clearDeviceMetricsOverride")
+        await nav("index.html")
+        await asyncio.sleep(1.5)
+        w2 = await js("document.querySelector('.tile')?.getBoundingClientRect().width")
+        check("desktop: grid layout restored", isinstance(w2, (int, float)) and w2 > 500, w2)
+
         print("== logout gates the viewer ==")
         await js("document.getElementById('logout').click()")
         await asyncio.sleep(1.5)

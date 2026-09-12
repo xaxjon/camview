@@ -8,11 +8,15 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
   #bar { height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
-    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; position: relative; }
   #bar h1 { font-size: 15px; }
   .brand img { height: 24px; display: block; }
   #bar a { color: #8ab4ff; text-decoration: none; }
   #bar .spacer { margin-left: auto; }
+  #burger { display: none; margin-left: auto; background: none; border: 1px solid #333;
+    border-radius: 4px; color: #ddd; font-size: 18px; line-height: 1;
+    padding: 3px 10px; cursor: pointer; }
+  #menu { display: contents; }
   main { padding: 16px; max-width: 1300px; margin: 0 auto; }
   #controls { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
   #controls button { padding: 5px 14px; border: 1px solid #333; border-radius: 4px;
@@ -61,19 +65,37 @@
   #fmodal #close { position: absolute; top: 8px; right: 10px; border: none;
     background: none; color: #888; font-size: 22px; cursor: pointer; }
   #fmodal #close:hover { color: #fff; }
+
+  @media (max-width: 700px) {
+    #burger { display: block; }
+    #menu { display: none; position: absolute; top: 44px; left: 0; right: 0; z-index: 40;
+      background: #1b1b1b; border-bottom: 1px solid #2a2a2a; padding: 12px 16px;
+      flex-direction: column; gap: 16px; font-size: 15px; }
+    #menu.open { display: flex; }
+    #menu .spacer { display: none; }
+    main { padding: 8px; }
+    .lane .name { width: 96px; font-size: 11px; gap: 5px; }
+    .lane .camthumb { width: 36px; }
+    .lane canvas { height: 36px; }
+    #axis { margin-left: 96px; }
+    #controls .note:last-child { display: none; }
+  }
 </style>
 </head>
 <body>
   <div id="bar">
     <a class="brand" href="https://xaxero.com" target="_blank" rel="noopener"><img src="https://xaxero.com/images/XaxeroLogoSansSloganCopy.png" alt="Xaxero"></a>
     <h1>Camview — motion</h1>
-    <a href="index.html">Viewer</a>
-    <a href="snapshots.html">Snapshots</a>
-    <a href="admin.html" class="admin-only" hidden>Cameras</a>
-    <a href="users.html" class="admin-only" hidden>Users</a>
-    <span class="spacer"></span>
-    <span id="who"></span>
-    <a href="#" id="logout">Log out</a>
+    <button id="burger" aria-label="Menu">☰</button>
+    <nav id="menu">
+      <a href="index.html">Viewer</a>
+      <a href="snapshots.html">Snapshots</a>
+      <a href="admin.html" class="admin-only" hidden>Cameras</a>
+      <a href="users.html" class="admin-only" hidden>Users</a>
+      <span class="spacer"></span>
+      <span id="who"></span>
+      <a href="#" id="logout">Log out</a>
+    </nav>
   </div>
   <main>
     <div id="controls">
@@ -105,6 +127,11 @@
 
 <script>
 'use strict';
+document.getElementById('burger').addEventListener('click', () =>
+  document.getElementById('menu').classList.toggle('open'));
+document.getElementById('menu').addEventListener('click', e => {
+  if (e.target.tagName === 'A') document.getElementById('menu').classList.remove('open');
+});
 let CSRF = '';
 let range = '24h';
 let data = null;          // api response

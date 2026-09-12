@@ -10,11 +10,18 @@
     font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
 
   #bar { height: 36px; display: flex; align-items: center; gap: 12px;
-    padding: 0 12px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+    padding: 0 12px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a;
+    position: relative; }
   #bar h1 { font-size: 14px; font-weight: 600; }
   .brand img { height: 24px; display: block; }
   #bar a { color: #8ab4ff; text-decoration: none; font-size: 13px; }
   #bar .hint { margin-left: auto; color: #888; font-size: 12px; }
+  #burger { display: none; margin-left: auto; background: none; border: 1px solid #333;
+    border-radius: 4px; color: #ddd; font-size: 18px; line-height: 1;
+    padding: 3px 10px; cursor: pointer; }
+  #menu { display: contents; }
+
+  /* mobile: hamburger menu + cameras stacked in a scrollable column */
 
   #stage { height: calc(100% - 36px); display: flex;
     align-items: center; justify-content: center; }
@@ -49,6 +56,19 @@
   .tile .toast.err { background: rgba(100,25,25,.9); }
 
   #empty { color: #888; }
+
+  @media (max-width: 700px) {
+    html, body { overflow: auto; height: auto; }
+    #bar .hint { display: none; }
+    #burger { display: block; }
+    #menu { display: none; position: absolute; top: 36px; left: 0; right: 0; z-index: 40;
+      background: #1b1b1b; border-bottom: 1px solid #2a2a2a; padding: 12px 16px;
+      flex-direction: column; gap: 16px; font-size: 15px; }
+    #menu.open { display: flex; }
+    #stage { display: block; height: auto; padding: 4px; }
+    #grid { display: block; }
+    .tile { width: 100%; aspect-ratio: 16/9; margin-bottom: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -56,10 +76,13 @@
     <a class="brand" href="https://xaxero.com" target="_blank" rel="noopener"><img src="https://xaxero.com/images/XaxeroLogoSansSloganCopy.png" alt="Xaxero"></a>
     <h1>Camview</h1>
     <span id="count"></span>
-    <a href="motion.html">Motion</a>
-    <a href="snapshots.html">Snapshots</a>
-    <a href="admin.html" id="admin-link" hidden>⚙ Cameras</a>
-    <a href="#" id="logout">Log out</a>
+    <button id="burger" aria-label="Menu">☰</button>
+    <nav id="menu">
+      <a href="motion.html">Motion</a>
+      <a href="snapshots.html">Snapshots</a>
+      <a href="admin.html" id="admin-link" hidden>⚙ Cameras</a>
+      <a href="#" id="logout">Log out</a>
+    </nav>
     <span class="hint">click = fullscreen &nbsp;·&nbsp; double-click = back to grid</span>
   </div>
   <div id="stage">
@@ -92,6 +115,11 @@ function bestLayout(n, W, H) {
 function layout() {
   const tiles = grid.children;
   if (!tiles.length) return;
+  if (window.innerWidth <= 700) {  // mobile: stacked, CSS-sized, scrollable
+    grid.style.gridTemplateColumns = '';
+    grid.style.gridAutoRows = '';
+    return;
+  }
   const stage = document.getElementById('stage');
   const W = stage.clientWidth - 8, H = stage.clientHeight - 8;
   const { cols, w, h } = bestLayout(tiles.length, W, H);
@@ -101,6 +129,12 @@ function layout() {
 }
 
 window.addEventListener('resize', layout);
+
+const burger = document.getElementById('burger');
+burger.addEventListener('click', () => document.getElementById('menu').classList.toggle('open'));
+document.getElementById('menu').addEventListener('click', e => {
+  if (e.target.tagName === 'A') document.getElementById('menu').classList.remove('open');
+});
 
 // ---------- WebRTC (WHEP) ----------
 
