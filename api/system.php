@@ -30,6 +30,20 @@ function read_net(): array {  // [rx bytes, tx bytes] over all non-loopback inte
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     check_csrf();
+    $b = body();
+    // settings update
+    if (isset($b['settings']) && is_array($b['settings'])) {
+        $s = $b['settings'];
+        $ret = (int) ($s['retention_days'] ?? 7);
+        if ($ret < 1 || $ret > 90) json_err('retention_days must be between 1 and 90');
+        $out = [
+            'capture_fullres' => !empty($s['capture_fullres']),
+            'retention_days' => $ret,
+        ];
+        save_settings($out);
+        json_out(['ok' => true, 'settings' => $out]);
+    }
+    // default action: purge files older than 1 day
     $files = 0;
     $bytes = 0;
     // motion day-dirs older than yesterday (keep today + yesterday)
@@ -92,4 +106,5 @@ json_out([
         'tx_total' => $tx2,
     ],
     'uptime' => $uptime,
+    'settings' => load_settings(),
 ]);

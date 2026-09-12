@@ -12,6 +12,23 @@ const MAX_SNAPSHOTS = 500;  // oldest are pruned beyond this
 const NAME_RE = '/^[a-zA-Z0-9_-]+$/';
 const SNAPSHOT_RE = '/^[a-zA-Z0-9_-]+-\d{8}-\d{6}(-\d+)?\.jpg$/';
 
+// ---------- settings store (system page) ----------
+
+const SETTINGS_FILE = CAMVIEW_ROOT . '/settings.json';
+const SETTINGS_DEFAULTS = ['capture_fullres' => true, 'retention_days' => 7];
+
+function load_settings(): array {
+    $d = json_decode((string) @file_get_contents(SETTINGS_FILE), true);
+    return [
+        'capture_fullres' => !isset($d['capture_fullres']) || !empty($d['capture_fullres']),
+        'retention_days' => isset($d['retention_days']) ? max(1, min(90, (int) $d['retention_days'])) : 7,
+    ];
+}
+
+function save_settings(array $s): void {
+    atomic_write(SETTINGS_FILE, json_encode($s, JSON_PRETTY_PRINT));
+}
+
 // ---------- snapshots ----------
 
 function ensure_snapshots_dir(): void {

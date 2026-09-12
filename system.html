@@ -37,6 +37,11 @@
   button:hover { filter: brightness(1.2); }
   #purge-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
   #purge-result { color: #8ab4ff; font-size: 13px; }
+  select { padding: 7px; background: #111; border: 1px solid #333; border-radius: 4px;
+    color: #ddd; width: 100%; }
+  .card .row { margin-bottom: 10px; }
+  .card .row label { display: block; color: #999; font-size: 12px; margin-bottom: 4px; }
+  #settings-result { color: #8ab4ff; font-size: 13px; margin-left: 10px; }
   #err { color: #ff6b6b; min-height: 18px; margin-top: 10px; }
 
   @media (max-width: 700px) {
@@ -92,6 +97,22 @@
         <div class="sub" id="cpu-sub"></div>
       </div>
       <div class="card">
+        <h2>Motion capture settings</h2>
+        <div class="row"><label>Capture size</label>
+          <select id="s-fullres">
+            <option value="1">Full frame (camera resolution)</option>
+            <option value="0">480p (small files)</option>
+          </select></div>
+        <div class="row"><label>Retention</label>
+          <select id="s-retention">
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+          </select></div>
+        <button id="save-settings">Save</button><span id="settings-result"></span>
+        <div class="sub">Full frame ≈ 190 KB/event (≈ 1 GB/week on this fleet);
+          480p ≈ 30 KB/event. Applies within a minute; retention prunes hourly.</div>
+      </div>
+      <div class="card">
         <h2>Network</h2>
         <div class="big" id="net-rates">—</div>
         <div class="sub" id="net-sub"></div>
@@ -109,6 +130,7 @@ document.getElementById('menu').addEventListener('click', e => {
 });
 
 let CSRF = '';
+let settingsLoaded = false;
 
 async function api(path, method = 'GET', data) {
   const res = await fetch('api/' + path, {
@@ -162,10 +184,32 @@ async function refresh() {
     `↓ ${fmtBytes(j.net.rx_rate)}/s · ↑ ${fmtBytes(j.net.tx_rate)}/s`;
   document.getElementById('net-sub').textContent =
     `total since boot: ${fmtBytes(j.net.rx_total)} down, ${fmtBytes(j.net.tx_total)} up`;
+  if (j.settings && !settingsLoaded) {
+    settingsLoaded = true;
+    applySettings(j.settings);
+  }
 }
 
-document.getElementById('purge').addEventListener('click', async () => {
-  if (!confirm('Delete all motion captures and snapshots older than 1 day?')) return;
+function applySettings(s) {
+  document.getElementById('s-fullres').value = s.capture_fullres ? '1' : '0';
+  document.getElementById('s-retention').value = String(s.retention_days);
+}
+
+document.getElementById('save-settings').addEventListener('click', async () => {
+  const out = document.getElementById('settings-result');
+  out.textContent = 'saving…';
+  try {
+    const j = await api('system.php', 'POST', { settings: {
+      capture_fullres: document.getElementById('s-fullres').value === '1',
+      retention_days: parseInt(document.getElementById('s-retention').value, 10),
+    }});
+    applySettings(j.settings);
+    out.textContent = 'saved';
+    setTimeout(() => { out.textContent = ''; }, 3000);
+  } catch (e) { out.textContent = e.message; }
+});
+
+document.getElementById('purge').addEventListener('click', async () => {  if (!confirm('Delete all motion captures and snapshots older than 1 day?')) return;
   const out = document.getElementById('purge-result');
   out.textContent = 'purging…';
   try {

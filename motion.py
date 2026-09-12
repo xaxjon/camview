@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Motion detection supervisor.
 
-Watches streams.json and runs one ffmpeg per camera that has "motion": true
-(and is not disabled). Each ffmpeg decodes keyframes only (-skip_frame nokey,
-cheap) and writes a JPEG whenever the frame-to-frame scene score exceeds the
-camera's threshold:
+Watches streams.json and runs one detection unit per camera that has
+"motion": true (and is not disabled). Detection decodes keyframes only
+(-skip_frame nokey, cheap) at 480p; captures land as:
 
     motion/<cam>/<YYYY-MM-DD>/<cam>-<Ymd-His>.jpg
 
@@ -17,15 +16,20 @@ Per-camera options in streams.json:
                               motion inside the rectangle triggers capture,
                               but the captured JPEG is always the full frame
 
-Zoned cameras run TWO ffmpeg processes (a single-process split/overlay
-graph wedges — ffmpeg 7's scheduler stalls when two outputs run at
-different rates, and framesync buffers the dense branch unboundedly):
-  - detector: keyframe-only, crops to the zone, writes small trigger JPEGs
-    to motion/<cam>/.trig/<Ymd-His>.jpg when the zone's scene score fires
-  - capturer: keyframe-only full frames, rewrites motion/<cam>/.latest.jpg
-    via image2 -update 1 (about one frame per keyframe interval)
+Every motion camera runs TWO ffmpeg processes (a single-process
+split/overlay graph wedges — ffmpeg 7's scheduler stalls when two outputs
+run at different rates, and framesync buffers the dense branch
+unboundedly):
+  - detector: keyframe-only at 480p (optionally zone-cropped), writes small
+    trigger JPEGs to motion/<cam>/.trig/<Ymd-His>.jpg when the scene score fires
+  - capturer: keyframe-only frames, rewrites motion/<cam>/.latest.jpg via
+    image2 -update 1 (about one frame per keyframe interval)
 The supervisor copies .latest.jpg into the timeline under the trigger's
 timestamp and deletes the trigger (checked roughly once a second).
+
+Global settings come from settings.json (edited on the System page):
+    "capture_fullres": true   full-resolution captures (default) vs 480p
+    "retention_days": 7       timeline retention (pruned hourly)
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
 exit on its own, and the supervisor watches each child's *decoded-frame*
@@ -45,7 +49,7 @@ capturer read the local MediaMTX restream path rtsp://127.0.0.1:<port>/
 substream itself (MediaMTX does not restream it).
 
 Env overrides (used by tests): MOTION_DIR, MOTION_RETENTION_DAYS,
-MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US,
+MOTION_FULLRES, MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US,
 MOTION_RTSP_BASE.
 """
 import json
@@ -62,9 +66,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 FFMPEG = ROOT / "bin" / "ffmpeg"
 STREAMS = ROOT / "streams.json"
+SETTINGS = ROOT / "settings.json"
 MOTION_DIR = Path(os.environ.get("MOTION_DIR", ROOT / "motion"))
 DEFAULT_THRESHOLD = 0.05
-RETENTION_DAYS = int(os.environ.get("MOTION_RETENTION_DAYS", "7"))
+ENV_RETENTION = os.environ.get("MOTION_RETENTION_DAYS")   # settings.json otherwise
+ENV_FULLRES = os.environ.get("MOTION_FULLRES")            # settings.json otherwise
 POLL_INTERVAL = float(os.environ.get("MOTION_POLL_INTERVAL", "30"))
 RESTART_DELAY = 10
 STALL_TIMEOUT = float(os.environ.get("MOTION_STALL_TIMEOUT", "120"))
@@ -72,8 +78,8 @@ TIMEOUT_US = os.environ.get("MOTION_TIMEOUT_US", "15000000")  # RTSP socket I/O
 RTSP_BASE = os.environ.get("MOTION_RTSP_BASE") or \
     f"rtsp://127.0.0.1:{os.environ.get('MTX_RTSP_PORT', '8554')}"
 
-children = {}      # name -> {"det": Popen, "cap": Popen|None} (cap = zoned only)
-running_cfg = {}   # name -> config signature of the running process
+children = {}      # name -> {"det": Popen, "cap": Popen}
+running_cfg = {}   # name -> config signature of the running unit
 restarted_at = {}  # name -> monotonic time of last (re)start
 last_frame = {}    # (name, role) -> monotonic time of last decoded frame (showinfo)
 fails = {}         # name -> consecutive fast-failure count (backs off retries)
@@ -82,6 +88,21 @@ shutdown = False
 
 def log(msg):
     print(f"motion: {msg}", file=sys.stderr, flush=True)
+
+
+def get_settings():
+    """System-page settings with env override for tests."""
+    try:
+        d = json.loads(SETTINGS.read_text())
+    except Exception:
+        d = {}
+    fullres = bool(d.get("capture_fullres", True))
+    retention = int(d.get("retention_days", 7) or 7)
+    if ENV_FULLRES is not None:
+        fullres = ENV_FULLRES != "0"
+    if ENV_RETENTION is not None:
+        retention = int(ENV_RETENTION)
+    return fullres, max(1, min(90, retention))
 
 
 def parse_zone(z):
@@ -98,7 +119,7 @@ def parse_zone(z):
 
 
 def load_config():
-    """name -> (det_source, cap_source, threshold, det_skip_frame, zone).
+    """name -> (det_source, cap_source, threshold, det_skip_frame, zone, fullres).
 
     Sources point at the local MediaMTX restream (<name>__raw) so the camera
     holds a single session regardless of consumers; a configured
@@ -109,6 +130,7 @@ def load_config():
     except Exception as e:
         log(f"cannot read streams.json: {e}")
         return {}
+    fullres, _ = get_settings()
     out = {}
     for s in data:
         if not isinstance(s, dict) or not s.get("name") or not s.get("source"):
@@ -123,6 +145,7 @@ def load_config():
             s.get("motion_threshold", DEFAULT_THRESHOLD),
             not sub,              # keyframe-only detection only on main stream
             parse_zone(s.get("motion_zone")),
+            fullres,
         )
     return out
 
@@ -138,9 +161,9 @@ def base_cmd(source, skip_frame):
 def detector_cmd(name, source, threshold, skip_frame, zone):
     # showinfo logs one stderr line per decoded frame -> the supervisor's
     # liveness signal; it sits before select so it sees every frame,
-    # not just motion frames
+    # not just motion frames. Detection always runs at 480p; triggers land
+    # in .trig/ and harvest copies the capturer's full frame over them.
     vf = f"scale=480:-1,showinfo,select='gt(scene,{threshold})'"
-    out = str(MOTION_DIR / name / "%Y-%m-%d" / f"{name}-%Y%m%d-%H%M%S.jpg")
     if zone:
         x, y, w, h = zone
         crop = (f"crop=max(floor(iw*{w:.6f}/2)*2\\,2):max(floor(ih*{h:.6f}/2)*2\\,2)"
@@ -149,16 +172,18 @@ def detector_cmd(name, source, threshold, skip_frame, zone):
         # freshly allocated buffer — scale->crop->select segfaults (GPF in a
         # filtergraph worker) on real 1080p yuvj420p cameras with ffmpeg 7.0.2
         vf = f"{crop},scale=480:-1,showinfo,select='gt(scene,{threshold})'"
-        out = str(MOTION_DIR / name / ".trig" / "%Y%m%d-%H%M%S.jpg")
+    out = str(MOTION_DIR / name / ".trig" / "%Y%m%d-%H%M%S.jpg")
     return base_cmd(source, skip_frame) + [
         "-vf", vf, "-vsync", "vfr", "-strftime", "1", out,
     ]
 
 
-def capturer_cmd(name, main_source):
-    # full frame, rewritten in place ~once per keyframe interval
-    return base_cmd(main_source, True) + [
-        "-vf", "scale=480:-1,showinfo", "-vsync", "vfr",
+def capturer_cmd(name, source, fullres):
+    # rewritten in place ~once per keyframe interval; full res or 480p
+    # depending on the System page setting
+    vf = "showinfo" if fullres else "scale=480:-1,showinfo"
+    return base_cmd(source, True) + [
+        "-vf", vf, "-vsync", "vfr",
         "-update", "1", str(MOTION_DIR / name / ".latest.jpg"),
     ]
 
@@ -178,7 +203,7 @@ def stop_child(name, sig=signal.SIGINT):
             p.stderr.close()
     for role in unit:
         last_frame.pop((name, role), None)
-    # drop zone state files; a zoned config recreates them on start
+    # drop trigger state; a running unit recreates it on start
     shutil.rmtree(MOTION_DIR / name / ".trig", ignore_errors=True)
     try:
         (MOTION_DIR / name / ".latest.jpg").unlink()
@@ -187,14 +212,13 @@ def stop_child(name, sig=signal.SIGINT):
 
 
 def start_child(name, cfg, delay):
-    det_source, main_source, threshold, skip_frame, zone = cfg
+    det_source, cap_source, threshold, skip_frame, zone, fullres = cfg
     cam_dir = MOTION_DIR / name
+    (cam_dir / ".trig").mkdir(parents=True, exist_ok=True)
     procs = {}
-    if zone:
-        (cam_dir / ".trig").mkdir(parents=True, exist_ok=True)
-        procs["cap"] = subprocess.Popen(
-            capturer_cmd(name, main_source),
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    procs["cap"] = subprocess.Popen(
+        capturer_cmd(name, cap_source, fullres),
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     procs["det"] = subprocess.Popen(
         detector_cmd(name, det_source, threshold, skip_frame, zone),
         stdout=subprocess.DEVNULL,
@@ -207,7 +231,8 @@ def start_child(name, cfg, delay):
     for role in procs:
         last_frame[(name, role)] = now
     log(f"started {name} (threshold={threshold}, skip_frame={skip_frame}, "
-        f"zone={zone if zone else 'full'}, retry_delay={delay}s)")
+        f"zone={zone if zone else 'full'}, res={'full' if fullres else '480p'}, "
+        f"retry_delay={delay}s)")
 
 
 def reconcile():
@@ -367,7 +392,8 @@ def drain(timeout):
 
 
 def prune():
-    cutoff = date.today() - timedelta(days=RETENTION_DAYS)
+    _, retention = get_settings()
+    cutoff = date.today() - timedelta(days=retention)
     for cam_dir in MOTION_DIR.iterdir() if MOTION_DIR.is_dir() else []:
         if not cam_dir.is_dir():
             continue
@@ -396,7 +422,9 @@ def main():
         ht.write_text("Require all denied\n")
 
     last_prune = 0.0
-    log(f"watching {STREAMS} -> {MOTION_DIR} (retention {RETENTION_DAYS}d)")
+    fullres, retention = get_settings()
+    log(f"watching {STREAMS} -> {MOTION_DIR} "
+        f"(retention {retention}d, capture={'full' if fullres else '480p'})")
     while not shutdown:
         reconcile()
         if time.monotonic() - last_prune > 3600:

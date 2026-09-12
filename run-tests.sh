@@ -171,8 +171,8 @@ MOTION_DIR="$MWORK/motion" MOTION_POLL_INTERVAL=2 \
   MOTION_RTSP_BASE="rtsp://127.0.0.1:28554" \
   python3 "$MWORK/motion.py" > "$MWORK/log.txt" 2>&1 & PIDS+=($!)
 sleep 25
-MOV_COUNT=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
-STATIC_COUNT=$(find "$MWORK/motion/static" -name '*.jpg' 2>/dev/null | wc -l)
+MOV_COUNT=$(find "$MWORK/motion/mov" -name 'mov-*.jpg' 2>/dev/null | wc -l)
+STATIC_COUNT=$(find "$MWORK/motion/static" -name 'static-*.jpg' 2>/dev/null | wc -l)
 echo "motion supervisor: mov=$MOV_COUNT jpegs, static=$STATIC_COUNT jpegs"
 if [ "$MOV_COUNT" -lt 2 ]; then echo "FAIL: moving camera produced <2 jpegs"; exit 1; fi
 if [ "$STATIC_COUNT" -gt 0 ]; then echo "FAIL: static camera produced jpegs"; exit 1; fi
@@ -211,9 +211,14 @@ grep -q "static: no decoded frames" "$MWORK/log.txt" \
   && { echo "FAIL: healthy idle camera wrongly flagged as stalled"; exit 1; }
 grep -q "mov: no decoded frames" "$MWORK/log.txt" \
   && { echo "FAIL: healthy moving camera wrongly flagged as stalled"; exit 1; }
-MOV_COUNT2=$(find "$MWORK/motion/mov" -name '*.jpg' 2>/dev/null | wc -l)
+MOV_COUNT2=$MOV_COUNT
+for i in $(seq 1 15); do  # mandelbrot has calm phases — allow up to 30s
+  [ "$MOV_COUNT2" -gt "$MOV_COUNT" ] && break
+  sleep 2
+  MOV_COUNT2=$(find "$MWORK/motion/mov" -name 'mov-*.jpg' 2>/dev/null | wc -l)
+done
 [ "$MOV_COUNT2" -gt "$MOV_COUNT" ] \
-  || { echo "FAIL: healthy camera stopped producing while stalls were handled"; exit 1; }
+  || { echo "FAIL: healthy camera stopped producing while stalls were handled ($MOV_COUNT -> $MOV_COUNT2)"; cat "$MWORK/log.txt" | grep -vE 'showinfo' | tail -30; exit 1; }
 echo "motion stall recovery: ok"
 
 # --- zone long-run: both zone processes must stay alive and the capturer
@@ -226,6 +231,27 @@ L2=$(stat -c %Y "$MWORK/motion/zonecam/.latest.jpg" 2>/dev/null || echo 0)
 NPROCS=$(pgrep -cf 'motion/zonecam')
 [ "$NPROCS" -ge 2 ] || { echo "FAIL: zonecam processes missing ($NPROCS)"; pgrep -af 'motion/zonecam'; exit 1; }
 echo "zone long-run: ok"
+
+# --- settings live-reload: switching to 480p restarts units at 480p ---
+dims() { ./bin/ffmpeg -i "$1" -f null - 2>&1 | grep -m1 'Stream.*Video' | grep -o '[0-9]\{2,\}x[0-9]\{2,\}' | head -1; }
+NEWEST_MOV=$(ls -t "$MWORK"/motion/mov/*/mov-*.jpg 2>/dev/null | head -1)
+FULL_DIMS=$(dims "$NEWEST_MOV")
+BEFORE=$(find "$MWORK/motion/mov" -name 'mov-*.jpg' | wc -l)
+printf '{"capture_fullres": false, "retention_days": 7}' > "$MWORK/settings.json"
+LOW_OK=0
+for i in $(seq 1 20); do  # restart within a poll cycle, then a fresh 480p capture
+  NEWF=$(find "$MWORK/motion/mov" -name 'mov-*.jpg' | wc -l)
+  if [ "$NEWF" -gt "$BEFORE" ]; then
+    LOW_DIMS=$(dims "$(ls -t "$MWORK"/motion/mov/*/mov-*.jpg | head -1)")
+    [ "$LOW_DIMS" = "480x360" ] && { LOW_OK=1; break; }
+  fi
+  sleep 2
+done
+if [ "$FULL_DIMS" != "640x480" ] || [ "$LOW_OK" != "1" ]; then
+  echo "FAIL: capture size setting not applied ($FULL_DIMS -> ${LOW_DIMS:-none}, want 640x480 -> 480x360)"
+  grep -E 'started mov|stopping mov' "$MWORK/log.txt" | tail -4; exit 1
+fi
+echo "capture size setting: ok ($FULL_DIMS -> $LOW_DIMS)"
 
 # --- RTSP -timeout: ffmpeg must error out of a silent socket on its own ---
 RW_START=$(date +%s)

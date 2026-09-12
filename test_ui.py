@@ -251,6 +251,28 @@ async def main():
         check("memory card shows detail", isinstance(memsub, str) and "used of" in memsub, memsub)
         net = await js("document.getElementById('net-rates').textContent")
         check("network rates shown", isinstance(net, str) and "↓" in net and "/s" in net, net)
+        sv = await js("document.getElementById('s-fullres').value + '/' + document.getElementById('s-retention').value")
+        check("settings selects show defaults", sv == "1/7", sv)
+        await js("document.getElementById('s-fullres').value = '0'; document.getElementById('s-retention').value = '30'")
+        await js("document.getElementById('save-settings').click()")
+        saved = None
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            saved = await js("document.getElementById('settings-result').textContent")
+            if saved == "saved":
+                break
+        check("settings save reports saved", saved == "saved", saved)
+        srv = await send("Runtime.evaluate", {"expression": """(async function(){
+          const r = await fetch('api/system.php');
+          const j = await r.json();
+          return JSON.stringify(j.settings);
+        })()""", "returnByValue": True, "awaitPromise": True})
+        srvv = srv.get("result", {}).get("result", {}).get("value")
+        check("settings persisted server-side",
+              srvv == '{"capture_fullres":false,"retention_days":30}', srvv)
+        await js("document.getElementById('s-fullres').value = '1'; document.getElementById('s-retention').value = '7'")
+        await js("document.getElementById('save-settings').click()")
+        await asyncio.sleep(1.5)
         await js("window.confirm = () => true")
         await js("document.getElementById('purge').click()")
         res = None
