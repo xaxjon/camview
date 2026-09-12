@@ -344,6 +344,35 @@ async def main():
         check("bucket click opens modal", await js("document.getElementById('modal-bg').classList.contains('open')"))
         src1 = await js("document.getElementById('fimg').src")
         check("modal shows a motion jpeg", isinstance(src1, str) and "motion.php%3Ffile%3D" in src1.replace("?", "%3F") or "motion.php?file=" in (src1 or ""), src1)
+
+        # zoom: wheel in, double-click toward full size, double-click back to fit
+        w0 = await js("document.getElementById('fimg').getBoundingClientRect().width")
+        cpt = await js("""(function(){
+          const r = document.getElementById('fwrap').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};
+        })()""")
+        await send("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": cpt["x"], "y": cpt["y"], "deltaX": 0, "deltaY": -240})
+        await asyncio.sleep(0.5)
+        w1 = await js("document.getElementById('fimg').getBoundingClientRect().width")
+        check("wheel zooms frame in", isinstance(w1, (int, float)) and w1 > w0 * 1.15, (w0, w1))
+        check("wrapper scrollable when zoomed",
+              await js("document.getElementById('fwrap').classList.contains('zoomed')"))
+        await js("""(function(){
+          const r = document.getElementById('fwrap').getBoundingClientRect();
+          document.getElementById('fwrap').dispatchEvent(new MouseEvent('dblclick',
+            {bubbles: true, clientX: r.left + r.width/2, clientY: r.top + r.height/2}));
+        })()""")
+        await asyncio.sleep(0.3)
+        w2 = await js("document.getElementById('fimg').getBoundingClientRect().width")
+        check("double-click while zoomed returns to fit", isinstance(w2, (int, float)) and abs(w2 - w0) <= 2, (w0, w2))
+        await js("""(function(){
+          const r = document.getElementById('fwrap').getBoundingClientRect();
+          document.getElementById('fwrap').dispatchEvent(new MouseEvent('dblclick',
+            {bubbles: true, clientX: r.left + r.width/2, clientY: r.top + r.height/2}));
+        })()""")
+        await asyncio.sleep(0.3)
+        w3 = await js("document.getElementById('fimg').getBoundingClientRect().width")
+        check("double-click at fit zooms to full size", isinstance(w3, (int, float)) and w3 >= w0 * 1.9, (w0, w3))
         pos1 = await js("document.getElementById('fpos').textContent")
         await js("document.getElementById('next').click()")
         await asyncio.sleep(0.5)

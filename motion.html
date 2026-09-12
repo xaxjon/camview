@@ -47,8 +47,11 @@
   #modal-bg.open { display: flex; }
   #fmodal { position: relative; max-width: 90vw; background: #161616;
     border: 1px solid #333; border-radius: 8px; padding: 12px; }
-  #fmodal img { display: block; max-width: 86vw; max-height: 76vh;
-    background: #000; margin: 0 auto; }
+  #fwrap { position: relative; margin: 0 auto; background: #000;
+    overflow: hidden; }
+  #fwrap.zoomed { overflow: auto; cursor: grab; }
+  #fwrap.zoomed:active { cursor: grabbing; }
+  #fimg { display: block; max-width: none; }
   #fmodal .cap { display: flex; align-items: center; gap: 12px; margin-top: 10px;
     font-size: 13px; color: #aaa; }
   #fmodal .cap b { color: #ddd; }
@@ -115,12 +118,13 @@
   <div id="modal-bg">
     <div id="fmodal">
       <button id="close" title="Close (Esc)">×</button>
-      <img id="fimg" alt="">
+      <div id="fwrap"><img id="fimg" alt=""></div>
       <button class="nav" id="prev" title="Previous frame (←)">‹</button>
       <button class="nav" id="next" title="Next frame (→)">›</button>
       <div class="cap">
         <button class="ctl" id="play" title="Timelapse (space)">▶ Timelapse</button>
         <b id="fcam"></b><span id="ftime"></span>
+        <span style="color:#666;font-size:11px">scroll = zoom · drag = pan · double-click = full size/fit</span>
         <span class="spacer" style="margin-left:auto" id="fpos"></span>
       </div>
     </div>
@@ -295,6 +299,85 @@ function hideThumb() { document.getElementById('thumb').style.display = 'none'; 
 // ---------- frame modal ----------
 
 const M = { cam: null, files: [], idx: 0, timer: null };
+const ZOOM = { z: 1, fitW: 0, fitH: 0 };
+
+function fitFrame() {
+  const img = document.getElementById('fimg');
+  const wrap = document.getElementById('fwrap');
+  const natW = img.naturalWidth || 480, natH = img.naturalHeight || 360;
+  let w = Math.min(window.innerWidth * 0.86, natW);
+  let h = w * natH / natW;
+  if (h > window.innerHeight * 0.76) {
+    h = window.innerHeight * 0.76;
+    w = h * natW / natH;
+  }
+  ZOOM.fitW = w;
+  ZOOM.fitH = h;
+  wrap.style.width = w + 'px';
+  wrap.style.height = h + 'px';
+  img.style.width = w + 'px';
+  ZOOM.z = 1;
+  wrap.classList.remove('zoomed');
+  wrap.scrollLeft = wrap.scrollTop = 0;
+}
+
+function zoomApply(cx, cy, zNew) {
+  const wrap = document.getElementById('fwrap');
+  const img = document.getElementById('fimg');
+  zNew = Math.min(8, Math.max(1, zNew));
+  const oldZ = ZOOM.z;
+  if (!ZOOM.fitW || zNew === oldZ) return;
+  const r = wrap.getBoundingClientRect();
+  const px = cx - r.left + wrap.scrollLeft;  // content coords before
+  const py = cy - r.top + wrap.scrollTop;
+  ZOOM.z = zNew;
+  img.style.width = (ZOOM.fitW * zNew) + 'px';
+  wrap.classList.toggle('zoomed', zNew > 1);
+  const f = zNew / oldZ;
+  wrap.scrollLeft = px * f - (cx - r.left);  // keep (cx, cy) fixed on the image
+  wrap.scrollTop = py * f - (cy - r.top);
+}
+
+function zoomToggle(cx, cy) {
+  const img = document.getElementById('fimg');
+  const full = Math.max((img.naturalWidth || 0) / (ZOOM.fitW || 1), 2);
+  zoomApply(cx, cy, ZOOM.z > 1 ? 1 : Math.min(8, full));
+}
+
+const fwrap = document.getElementById('fwrap');
+fwrap.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  zoomApply(ev.clientX, ev.clientY, ZOOM.z * (ev.deltaY < 0 ? 1.25 : 0.8));
+}, { passive: false });
+fwrap.addEventListener('dblclick', ev => zoomToggle(ev.clientX, ev.clientY));
+
+// drag to pan when zoomed; two pointers = pinch zoom (mobile)
+const panPts = new Map();
+let panStart = null, pinch0 = null;
+fwrap.addEventListener('pointerdown', ev => {
+  panPts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (panPts.size === 1 && ZOOM.z > 1) {
+    panStart = { x: ev.clientX, y: ev.clientY, sl: fwrap.scrollLeft, st: fwrap.scrollTop };
+  } else if (panPts.size === 2) {
+    panStart = null;
+    const [a, b] = [...panPts.values()];
+    pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: ZOOM.z };
+  }
+});
+fwrap.addEventListener('pointermove', ev => {
+  if (!panPts.has(ev.pointerId)) return;
+  panPts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (panPts.size === 2 && pinch0 && pinch0.d > 0) {
+    const [a, b] = [...panPts.values()];
+    zoomApply((a.x + b.x) / 2, (a.y + b.y) / 2, pinch0.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch0.d);
+  } else if (panStart) {
+    fwrap.scrollLeft = panStart.sl - (ev.clientX - panStart.x);
+    fwrap.scrollTop = panStart.st - (ev.clientY - panStart.y);
+  }
+});
+const panEnd = ev => { panPts.delete(ev.pointerId); panStart = null; pinch0 = null; };
+fwrap.addEventListener('pointerup', panEnd);
+fwrap.addEventListener('pointercancel', panEnd);
 
 function openModal(cam, rel) {
   M.cam = cam;
@@ -311,6 +394,7 @@ function closeModal() {
 
 function showFrame() {
   const img = document.getElementById('fimg');
+  img.onload = fitFrame;
   img.src = 'api/motion.php?file=' + encodeURIComponent(M.files[M.idx]);
   const ts = (data.files[M.cam] || [])[M.idx]?.[0];
   document.getElementById('fcam').textContent = M.cam;
