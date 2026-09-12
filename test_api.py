@@ -175,6 +175,44 @@ api("logout.php", "POST")
 s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
 api("cameras.php", "DELETE", {"name": "testcam"}, j.get("csrf"))
 
+print("== system page API ==")
+import datetime
+import time
+s, j = api("system.php", "POST", {}, csrf)
+check("purge without CSRF rejected", s == 403)
+s, j = api("login.php", "POST", {"username": "bob", "password": "viewerpass1"})
+s, j = api("system.php")
+check("viewer cannot read system stats (403)", s == 403, s)
+api("logout.php", "POST")
+s, j = api("login.php", "POST", {"username": "admin", "password": "adminpass1"})
+csrf = j.get("csrf")
+s, j = api("system.php")
+check("system stats shape", s == 200 and j["disk"]["total"] > 0 and 0 <= j["cpu"] <= 100
+      and j["mem"]["total"] > 0 and len(j["load"]) == 3 and "rx_rate" in j["net"]
+      and j["cores"] >= 1, j)
+# seed old + recent files
+work = pathlib.Path("/tmp/camview-test")
+old_day = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+old_ts = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d-%H%M%S")
+odir = work / "motion" / "testcam" / old_day
+odir.mkdir(parents=True, exist_ok=True)
+old_motion = odir / f"testcam-{old_ts}.jpg"
+old_motion.write_bytes(b"\xff\xd8old")
+snap_dir = work / "snapshots"
+snap_dir.mkdir(exist_ok=True)
+old_snap = snap_dir / "testcam-20200101-000000.jpg"
+old_snap.write_bytes(b"\xff\xd8old")
+os.utime(old_snap, (time.time() - 3 * 86400,) * 2)
+new_snap = snap_dir / f"testcam-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jpg"
+new_snap.write_bytes(b"\xff\xd8new")
+s, j = api("system.php", "POST", {}, csrf)
+check("purge > 1 day frees files", s == 200 and j.get("ok") and j["files"] >= 2 and j["bytes"] > 0, j)
+check("old motion day purged", not old_motion.exists())
+check("old snapshot purged", not old_snap.exists())
+check("recent snapshot kept", new_snap.exists())
+s, j = api("system.php", "POST", {}, csrf)
+check("second purge is a no-op", s == 200 and j.get("files") == 0, j)
+
 print("== corrupt streams.json surfaces an error ==")
 sf = pathlib.Path("/tmp/camview-test/streams.json")
 orig = sf.read_text()

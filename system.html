@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camview — system</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  #bar { height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+    background: #1b1b1b; border-bottom: 1px solid #2a2a2a; position: relative; }
+  #bar h1 { font-size: 15px; }
+  .brand img { height: 24px; display: block; }
+  #bar a { color: #8ab4ff; text-decoration: none; }
+  #bar .spacer { margin-left: auto; }
+  #burger { display: none; margin-left: auto; background: none; border: 1px solid #333;
+    border-radius: 4px; color: #ddd; font-size: 18px; line-height: 1;
+    padding: 3px 10px; cursor: pointer; }
+  #menu { display: contents; }
+  main { padding: 20px; max-width: 900px; margin: 0 auto; }
+
+  #cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: #1b1b1b; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 13px; color: #999; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .4px; margin-bottom: 8px; }
+  .big { font-size: 30px; font-weight: 700; }
+  .sub { color: #999; font-size: 13px; margin-top: 4px; }
+  .meter { height: 8px; background: #2a2a2a; border-radius: 4px; margin-top: 10px;
+    overflow: hidden; }
+  .meter div { height: 100%; border-radius: 4px; background: #4caf50;
+    transition: width .4s, background .4s; }
+  .meter.warn div { background: #ff9800; }
+  .meter.crit div { background: #f44336; }
+  button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer;
+    background: #2d6cdf; color: #fff; }
+  button.danger { background: #662222; }
+  button:hover { filter: brightness(1.2); }
+  #purge-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  #purge-result { color: #8ab4ff; font-size: 13px; }
+  #err { color: #ff6b6b; min-height: 18px; margin-top: 10px; }
+
+  @media (max-width: 700px) {
+    #burger { display: block; }
+    #menu { display: none; position: absolute; top: 44px; left: 0; right: 0; z-index: 40;
+      background: #1b1b1b; border-bottom: 1px solid #2a2a2a; padding: 12px 16px;
+      flex-direction: column; gap: 16px; font-size: 15px; }
+    #menu.open { display: flex; }
+    #menu .spacer { display: none; }
+    main { padding: 10px; }
+    #cards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <a class="brand" href="https://xaxero.com" target="_blank" rel="noopener"><img src="https://xaxero.com/images/XaxeroLogoSansSloganCopy.png" alt="Xaxero"></a>
+    <h1>Camview — system</h1>
+    <button id="burger" aria-label="Menu">☰</button>
+    <nav id="menu">
+      <a href="index.html">Viewer</a>
+      <a href="motion.html">Motion</a>
+      <a href="snapshots.html">Snapshots</a>
+      <a href="admin.html">Cameras</a>
+      <a href="users.html">Users</a>
+      <span class="spacer"></span>
+      <span id="who"></span>
+      <a href="#" id="logout">Log out</a>
+    </nav>
+  </div>
+  <main>
+    <div id="cards">
+      <div class="card">
+        <h2>Disk</h2>
+        <div class="big" id="disk-pct">—</div>
+        <div class="meter"><div id="disk-bar"></div></div>
+        <div class="sub" id="disk-sub"></div>
+        <div id="purge-row">
+          <button class="danger" id="purge">Purge &gt; 1 day</button>
+          <span id="purge-result"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Memory</h2>
+        <div class="big" id="mem-pct">—</div>
+        <div class="meter"><div id="mem-bar"></div></div>
+        <div class="sub" id="mem-sub"></div>
+      </div>
+      <div class="card">
+        <h2>CPU</h2>
+        <div class="big" id="cpu-pct">—</div>
+        <div class="meter"><div id="cpu-bar"></div></div>
+        <div class="sub" id="cpu-sub"></div>
+      </div>
+      <div class="card">
+        <h2>Network</h2>
+        <div class="big" id="net-rates">—</div>
+        <div class="sub" id="net-sub"></div>
+      </div>
+    </div>
+    <div id="err"></div>
+  </main>
+
+<script>
+'use strict';
+document.getElementById('burger').addEventListener('click', () =>
+  document.getElementById('menu').classList.toggle('open'));
+document.getElementById('menu').addEventListener('click', e => {
+  if (e.target.tagName === 'A') document.getElementById('menu').classList.remove('open');
+});
+
+let CSRF = '';
+
+async function api(path, method = 'GET', data) {
+  const res = await fetch('api/' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  if (res.status === 401) { location = 'login.html'; throw new Error('auth'); }
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+function fmtBytes(n) {
+  for (const [u, v] of [['TB', 1e12], ['GB', 1e9], ['MB', 1e6], ['KB', 1e3]]) {
+    if (n >= v) return (n / v).toFixed(1) + ' ' + u;
+  }
+  return Math.round(n) + ' B';
+}
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  return d ? `${d}d ${h}h` : `${h}h ${Math.floor((s % 3600) / 60)}m`;
+}
+function meter(el, pct) {
+  el.style.width = Math.min(100, pct) + '%';
+  el.parentElement.className = 'meter' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
+}
+
+async function refresh() {
+  const j = await api('system.php');
+  const dPct = j.disk.total ? 100 * j.disk.used / j.disk.total : 0;
+  document.getElementById('disk-pct').textContent = dPct.toFixed(0) + '% full';
+  meter(document.getElementById('disk-bar'), dPct);
+  document.getElementById('disk-sub').textContent =
+    `${fmtBytes(j.disk.used)} used of ${fmtBytes(j.disk.total)} — ${fmtBytes(j.disk.free)} free`;
+
+  const mPct = j.mem.total ? 100 * j.mem.used / j.mem.total : 0;
+  document.getElementById('mem-pct').textContent = mPct.toFixed(0) + '% used';
+  meter(document.getElementById('mem-bar'), mPct);
+  document.getElementById('mem-sub').textContent =
+    `${fmtBytes(j.mem.used)} used of ${fmtBytes(j.mem.total)} — ${fmtBytes(j.mem.available)} available`;
+
+  document.getElementById('cpu-pct').textContent = j.cpu.toFixed(0) + '%';
+  meter(document.getElementById('cpu-bar'), j.cpu);
+  const [l1, l5, l15] = j.load;
+  document.getElementById('cpu-sub').textContent =
+    `load ${l1.toFixed(2)} / ${l5.toFixed(2)} / ${l15.toFixed(2)} on ${j.cores} cores` +
+    (j.uptime ? ` · up ${fmtUptime(j.uptime)}` : '');
+
+  document.getElementById('net-rates').textContent =
+    `↓ ${fmtBytes(j.net.rx_rate)}/s · ↑ ${fmtBytes(j.net.tx_rate)}/s`;
+  document.getElementById('net-sub').textContent =
+    `total since boot: ${fmtBytes(j.net.rx_total)} down, ${fmtBytes(j.net.tx_total)} up`;
+}
+
+document.getElementById('purge').addEventListener('click', async () => {
+  if (!confirm('Delete all motion captures and snapshots older than 1 day?')) return;
+  const out = document.getElementById('purge-result');
+  out.textContent = 'purging…';
+  try {
+    const j = await api('system.php', 'POST', {});
+    out.textContent = j.files
+      ? `freed ${fmtBytes(j.bytes)} (${j.files} files)`
+      : 'nothing to purge';
+    refresh();
+  } catch (e) { out.textContent = e.message; }
+});
+
+document.getElementById('logout').addEventListener('click', async e => {
+  e.preventDefault();
+  await api('logout.php', 'POST');
+  location = 'login.html';
+});
+
+(async () => {
+  const me = await api('me.php');
+  if (me.setup_needed) { location = 'setup.html'; return; }
+  if (me.user.role !== 'admin') { location = 'index.html'; return; }
+  CSRF = me.csrf;
+  document.getElementById('who').textContent = me.user.username;
+  refresh().catch(e => { document.getElementById('err').textContent = e.message; });
+  setInterval(() => { if (document.visibilityState === 'visible') refresh().catch(() => {}); }, 3000);
+})();
+</script>
+</body>
+</html>

@@ -233,6 +233,8 @@ Requires `google-chrome` and the Python `websockets` package.
 - `index.html` — viewer grid (login required)
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)
+- `system.html` — system status (admin only): disk/memory/CPU/load/network
+  cards plus a "purge > 1 day" button for old motion captures and snapshots
 - `motion.html` — motion timeline (lane per camera, hover thumbnails)
 - `motion.py` + `camview-motion.service` — motion detection supervisor
   (one keyframe-decoding ffmpeg per motion-enabled camera, 7-day retention)

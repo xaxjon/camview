@@ -238,6 +238,28 @@ async def main():
         check("drag works after reopen", rect == "[0.3,0.3,0.4,0.4]", rect)
         await js("document.getElementById('zone-cancel').click()")
 
+        print("== system page ==")
+        check("admin bar has System link", await js(
+            "[...document.querySelectorAll('#menu a')].some(a => a.getAttribute('href') === 'system.html')"))
+        await nav("system.html")
+        await asyncio.sleep(3)  # first refresh includes a 500ms sample window
+        diskpct = await js("document.getElementById('disk-pct').textContent")
+        check("disk card shows percent", isinstance(diskpct, str) and diskpct.endswith("% full"), diskpct)
+        memsub = await js("document.getElementById('mem-sub').textContent")
+        check("memory card shows detail", isinstance(memsub, str) and "used of" in memsub, memsub)
+        net = await js("document.getElementById('net-rates').textContent")
+        check("network rates shown", isinstance(net, str) and "↓" in net and "/s" in net, net)
+        await js("window.confirm = () => true")
+        await js("document.getElementById('purge').click()")
+        res = None
+        for _ in range(10):
+            await asyncio.sleep(1)
+            res = await js("document.getElementById('purge-result').textContent")
+            if res and "purging" not in res:
+                break
+        check("purge button reports result",
+              isinstance(res, str) and ("freed" in res or "nothing to purge" in res), res)
+
         print("== motion timeline page ==")
         await nav("motion.html")
         await asyncio.sleep(2)
