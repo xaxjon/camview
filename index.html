@@ -281,28 +281,70 @@ document.addEventListener('visibilitychange', () => {
       if (!ctl.active) { ctl.active = true; runStream(name, ctl); }
     }
     refreshDots();
+    // mobile browsers suspend the AudioContext in the background — wake it
+    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   }
 });
 
 // ---------- motion alarm (bell widget) ----------
 
 let audioCtx = null;
-function chime() {
+let alarmAudio = null, chimeUrl = null;
+
+// tiny two-tone WAV as a data URI — fallback for browsers where the
+// AudioContext refuses to run (iOS is aggressive about suspending it)
+function chimeWavUrl() {
+  if (chimeUrl) return chimeUrl;
+  const sr = 8000, n = Math.floor(sr * 0.55);
+  const data = new Uint8Array(44 + n * 2);
+  const dv = new DataView(data.buffer);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) data[o + i] = s.charCodeAt(i); };
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ws(8, 'WAVEfmt ');
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true); ws(36, 'data'); dv.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr, f = t < 0.27 ? 880 : 660;
+    const env = Math.min(1, 8 * t) * Math.exp(-4 * t);
+    dv.setInt16(44 + i * 2, Math.sin(2 * Math.PI * f * t) * env * 0.6 * 32767, true);
+  }
+  chimeUrl = 'data:audio/wav;base64,' + btoa(String.fromCharCode(...data));
+  return chimeUrl;
+}
+
+async function chime() {
+  window.__chimeCount = (window.__chimeCount || 0) + 1;  // test/debug hook
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    audioCtx.resume();
-    const t0 = audioCtx.currentTime;
-    [880, 660].forEach((f, i) => {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.frequency.value = f;
-      o.type = 'sine';
-      g.gain.setValueAtTime(0.25, t0 + i * 0.18);
-      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.18 + 0.2);
-      o.connect(g).connect(audioCtx.destination);
-      o.start(t0 + i * 0.18);
-      o.stop(t0 + i * 0.18 + 0.2);
-    });
-  } catch { /* audio unavailable — the red frame still shows */ }
+    if (audioCtx.state !== 'running') await audioCtx.resume();
+    if (audioCtx.state === 'running') {
+      const t0 = audioCtx.currentTime + 0.03;  // let the resume settle
+      [880, 660].forEach((f, i) => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.frequency.value = f;
+        o.type = 'sine';
+        g.gain.setValueAtTime(0.35, t0 + i * 0.22);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.22 + 0.28);
+        o.connect(g).connect(audioCtx.destination);
+        o.start(t0 + i * 0.22);
+        o.stop(t0 + i * 0.22 + 0.28);
+      });
+      return;
+    }
+  } catch { /* fall through to the <audio> element */ }
+  try {
+    alarmAudio = alarmAudio || new Audio(chimeWavUrl());
+    alarmAudio.currentTime = 0;
+    await alarmAudio.play();
+  } catch (e) {
+    console.warn('chime blocked by browser', e);
+    // tell the user once per page view — the fix is one tap on the bell
+    if (!window.__chimeBlockedShown) {
+      window.__chimeBlockedShown = true;
+      const t = grid.querySelector('.tile.alarmed');
+      if (t) toast(t, '🔇 sound blocked — tap the bell once to enable', true);
+    }
+  }
 }
 
 const bellOn = name => localStorage.getItem('camview_bell_' + name) === '1';
@@ -392,7 +434,7 @@ function makeTile(stream) {
 
   const bell = document.createElement('button');
   bell.className = 'btn bell';
-  bell.title = 'Motion alarm: chime + red frame on motion';
+  bell.title = 'Motion alarm: chime + red frame on motion (tap once to enable sound)';
   if (!stream.motion) bell.hidden = true;
   const setBell = on => {
     bell.classList.toggle('on', on);

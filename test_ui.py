@@ -494,6 +494,8 @@ async def main():
             if alarmed:
                 break
         check("motion event raises red frame", bool(alarmed), alarmed)
+        check("chime fired on motion event",
+              await js("(window.__chimeCount || 0) >= 1"), await js("window.__chimeCount"))
         # bell off -> frame clears and new events stay quiet
         await js("document.querySelector('.tile[data-name=testcam] .bell').click()")
         (daydir / f"testcam-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jpg").write_bytes(b"\xff\xd8y")
