@@ -483,6 +483,13 @@ async def main():
         check("bell toggles on", await js(
             "document.querySelector('.tile[data-name=testcam] .bell').classList.contains('on')"))
         check("bell state persisted", await js("localStorage.getItem('camview_bell_testcam')") == "1")
+        # the indicator mechanism: blocked -> amber pulse on the armed bell
+        await js("audioBlocked = true; updateBellAudioState()")
+        check("blocked audio shows amber indicator", await js(
+            "document.querySelector('.tile[data-name=testcam] .bell').classList.contains('noaudio')"))
+        await js("audioBlocked = false; updateBellAudioState()")
+        check("unblocked audio clears indicator", await js(
+            "!document.querySelector('.tile[data-name=testcam] .bell').classList.contains('noaudio')"))
         # a fresh motion capture -> red frame within a poll cycle
         daydir = pathlib.Path("/tmp/camview-test/motion/testcam") / datetime.date.today().isoformat()
         daydir.mkdir(parents=True, exist_ok=True)

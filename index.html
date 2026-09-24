@@ -51,6 +51,9 @@
   .tile .snap { right: 40px; bottom: 6px; }
   .tile .bell { right: 74px; bottom: 6px; }
   .tile .bell.on { background: #2d6cdf; color: #fff; }
+  .tile .bell.noaudio { background: #b26a00; color: #fff;
+    animation: bellpulse 1.4s infinite; }
+  @keyframes bellpulse { 50% { opacity: .45; } }
   .tile.alarmed { outline: 4px solid #f52313; outline-offset: -4px;
     box-shadow: 0 0 18px rgba(245,35,19,.8); }
 
@@ -282,7 +285,9 @@ document.addEventListener('visibilitychange', () => {
     }
     refreshDots();
     // mobile browsers suspend the AudioContext in the background — wake it
+    // and re-light the amber bell if the unlock could not be refreshed
     if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    updateBellAudioState();
   }
 });
 
@@ -290,32 +295,27 @@ document.addEventListener('visibilitychange', () => {
 
 let audioCtx = null;
 let alarmAudio = null, chimeUrl = null;
+let audioBlocked = true;   // assume blocked until a chime actually plays
 
-// tiny two-tone WAV as a data URI — fallback for browsers where the
-// AudioContext refuses to run (iOS is aggressive about suspending it)
-function chimeWavUrl() {
-  if (chimeUrl) return chimeUrl;
-  const sr = 8000, n = Math.floor(sr * 0.55);
-  const data = new Uint8Array(44 + n * 2);
-  const dv = new DataView(data.buffer);
-  const ws = (o, s) => { for (let i = 0; i < s.length; i++) data[o + i] = s.charCodeAt(i); };
-  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ws(8, 'WAVEfmt ');
-  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
-  dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true);
-  dv.setUint16(34, 16, true); ws(36, 'data'); dv.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) {
-    const t = i / sr, f = t < 0.27 ? 880 : 660;
-    const env = Math.min(1, 8 * t) * Math.exp(-4 * t);
-    dv.setInt16(44 + i * 2, Math.sin(2 * Math.PI * f * t) * env * 0.6 * 32767, true);
+// armed-but-silent is the failure mode browsers force on us (audio unlock
+// expires in the background) — make it unmissable: the bell pulses amber
+function updateBellAudioState() {
+  for (const name of streamCtls.keys()) {
+    const b = grid.querySelector(`.tile[data-name="${CSS.escape(name)}"] .bell`);
+    if (b && bellOn(name)) b.classList.toggle('noaudio', audioBlocked);
   }
-  chimeUrl = 'data:audio/wav;base64,' + btoa(String.fromCharCode(...data));
-  return chimeUrl;
 }
+
+// any real tap refreshes the audio unlock (browsers require a gesture)
+document.addEventListener('pointerdown', () => {
+  if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+}, { passive: true });
 
 async function chime() {
   window.__chimeCount = (window.__chimeCount || 0) + 1;  // test/debug hook
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.onstatechange = updateBellAudioState;
     if (audioCtx.state !== 'running') await audioCtx.resume();
     if (audioCtx.state === 'running') {
       const t0 = audioCtx.currentTime + 0.03;  // let the resume settle
@@ -329,6 +329,8 @@ async function chime() {
         o.start(t0 + i * 0.22);
         o.stop(t0 + i * 0.22 + 0.28);
       });
+      audioBlocked = false;
+      updateBellAudioState();
       return;
     }
   } catch { /* fall through to the <audio> element */ }
@@ -336,15 +338,12 @@ async function chime() {
     alarmAudio = alarmAudio || new Audio(chimeWavUrl());
     alarmAudio.currentTime = 0;
     await alarmAudio.play();
+    audioBlocked = false;
   } catch (e) {
     console.warn('chime blocked by browser', e);
-    // tell the user once per page view — the fix is one tap on the bell
-    if (!window.__chimeBlockedShown) {
-      window.__chimeBlockedShown = true;
-      const t = grid.querySelector('.tile.alarmed');
-      if (t) toast(t, '🔇 sound blocked — tap the bell once to enable', true);
-    }
+    audioBlocked = true;  // the amber pulse tells the user a tap is needed
   }
+  updateBellAudioState();
 }
 
 const bellOn = name => localStorage.getItem('camview_bell_' + name) === '1';
@@ -438,6 +437,7 @@ function makeTile(stream) {
   if (!stream.motion) bell.hidden = true;
   const setBell = on => {
     bell.classList.toggle('on', on);
+    bell.classList.remove('noaudio');  // re-evaluated by the next chime/update
     bell.textContent = on ? '🔔' : '🔕';
     localStorage.setItem('camview_bell_' + stream.name, on ? '1' : '0');
   };
@@ -520,6 +520,15 @@ async function init() {
   count.textContent = `${streams.length} camera${streams.length > 1 ? 's' : ''}`;
   streams.forEach(makeTile);
   layout();
+  // if bells are armed from a previous visit, audio starts blocked until
+  // the first tap — show the amber bell immediately so it can't be missed
+  if (streams.some(s => bellOn(s.name))) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx.onstatechange = updateBellAudioState;
+    } catch {}
+    updateBellAudioState();
+  }
   refreshDots();
   // skip polling while hidden — the page resumes it via visibilitychange
   setInterval(() => { if (document.visibilityState === 'visible') refreshDots(); }, 15000);
