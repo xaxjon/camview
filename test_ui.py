@@ -51,8 +51,9 @@ async def main():
                 m = resp.get("method")
                 if m == "Runtime.exceptionThrown":
                     console_log.append("PAGE-EXCEPTION: " + str(resp["params"])[:250])
-                elif m == "Runtime.consoleAPICalled" and resp["params"].get("type") == "error":
-                    console_log.append("CONSOLE.ERROR: " + str(resp["params"])[:250])
+                elif m == "Runtime.consoleAPICalled" and resp["params"].get("type") in ("error", "warning", "log"):
+                    console_log.append(resp["params"].get("type").upper() + ": " +
+                                       " ".join(str(a.get("value", "")) for a in resp["params"].get("args", []))[:250])
 
         async def js(expr):
             r = await send("Runtime.evaluate", {"expression": expr, "returnByValue": True})
@@ -492,6 +493,32 @@ async def main():
                 break
             await asyncio.sleep(1)
         check("visible: streams resume", bool(resumed), resumed)
+
+        print("== link loss recovery (tunnel/Starlink flap) ==")
+        await js("""window.__failNet = false;
+if (!window.__origFetch) {
+  window.__origFetch = window.fetch;
+  window.fetch = (...a) => window.__failNet ? Promise.reject(new TypeError('net down')) : window.__origFetch(...a);
+}""")
+        await js("window.__failNet = true")
+        down = False
+        for _ in range(14):  # link supervisor pings every 8s
+            await asyncio.sleep(1)
+            down = await js("!document.getElementById('linkdown').hidden")
+            if down:
+                break
+        check("link loss shows banner", bool(down), down)
+        await js("window.__failNet = false")
+        back = False
+        diag = ""
+        for _ in range(35):
+            await asyncio.sleep(1)
+            back = await js("document.getElementById('linkdown').hidden && peers.size > 0 && [...document.querySelectorAll('.tile video')].some(v => v.srcObject)")
+            if back:
+                break
+        if not back:
+            diag = await js("JSON.stringify({banner: !document.getElementById('linkdown').hidden, peers: peers.size, keys: [...peers.keys()], srcObjs: [...document.querySelectorAll('.tile video')].map(v => !!v.srcObject), statuses: [...document.querySelectorAll('.tile .status')].map(s => s.textContent + (s.hidden ? ' (hidden)' : ''))})")
+        check("streams recover without reload", bool(back), diag)
 
         print("== motion alarm bell ==")
         check("bell present on motion camera tile", await js(

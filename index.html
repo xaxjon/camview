@@ -62,6 +62,10 @@
     font-size: 12px; pointer-events: none; white-space: nowrap; }
   .tile .toast.err { background: rgba(100,25,25,.9); }
 
+  #linkdown { position: fixed; top: 44px; left: 50%; transform: translateX(-50%);
+    background: #662222; color: #fff; padding: 6px 16px; border-radius: 4px;
+    font-size: 13px; z-index: 60; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+
   #empty { color: #888; }
 
   @media (max-width: 700px) {
@@ -96,6 +100,7 @@
   <div id="stage">
     <div id="grid"></div>
   </div>
+  <div id="linkdown" hidden>connection lost — will resume automatically…</div>
 
 <script>
 'use strict';
@@ -165,7 +170,11 @@ async function connect(name, video) {
   try {
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
-    pc.ontrack = e => { video.srcObject = e.streams[0]; };
+    let trackResolver = null;
+    pc.ontrack = e => {
+      video.srcObject = e.streams[0];
+      if (trackResolver) { trackResolver(); trackResolver = null; }
+    };
 
     await pc.setLocalDescription(await pc.createOffer());
     await waitForIce(pc);
@@ -183,6 +192,15 @@ async function connect(name, video) {
     if (!res.ok) throw new Error(`WHEP ${res.status}`);
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
     peers.set(name, pc);
+    // a handshake that never delivers a track (lossy link, wedged session)
+    // is dead even if ICE says otherwise — force a retry
+    if (!video.srcObject) {
+      await Promise.race([
+        new Promise(res => { trackResolver = res; }),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('no track within 10s')), 10000)),
+      ]);
+    }
     return pc;
   } catch (err) {
     pc.close();
@@ -191,11 +209,23 @@ async function connect(name, video) {
 }
 
 // Wait until a peer connection dies (failed, or closed by the stall watchdog).
+// Polls as well as listening: the connectionstatechange event is not always
+// delivered (throttled/backgrounded pages), and a missed event would wedge
+// the tile's reconnect loop until a page reload.
 function untilDead(pc) {
   return new Promise(resolve => {
-    if (pc.connectionState === 'closed') return resolve();
+    const t = setInterval(() => {
+      if (['failed', 'closed'].includes(pc.connectionState)) {
+        clearInterval(t);
+        resolve();
+      }
+    }, 2000);
+    if (pc.connectionState === 'closed') { clearInterval(t); return resolve(); }
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed'].includes(pc.connectionState)) resolve();
+      if (['failed', 'closed'].includes(pc.connectionState)) {
+        clearInterval(t);
+        resolve();
+      }
     };
   });
 }
@@ -209,6 +239,7 @@ function stopStream(name) {
   const ctl = streamCtls.get(name);
   if (!ctl) return;
   ctl.active = false;
+  ctl.gen = (ctl.gen || 0) + 1;  // any loop still running from before must exit
   if (ctl.wake) ctl.wake();
   const pc = peers.get(name);
   if (pc) { try { pc.close(); } catch {} }
@@ -218,13 +249,17 @@ function stopStream(name) {
 
 async function runStream(name, ctl) {
   const { video, status } = ctl;
-  let attempt = 0;
+  const myGen = ctl.gen || 0;
+  // a stale loop (suspended mid-sleep, then resumed) must never touch shared
+  // state again — otherwise two loops fight over peers and the tile wedges
+  const alive = () => ctl.active && (ctl.gen || 0) === myGen;
+  ctl.attempt = 0;
 
   // stall watchdog: if the picture stops advancing, the connection is
   // effectively dead even if ICE still looks fine — force a reconnect.
   let lastTime = -1, lastProgress = Date.now();
   const watchdog = setInterval(() => {
-    if (!ctl.active) { clearInterval(watchdog); return; }
+    if (!alive()) { clearInterval(watchdog); return; }
     const pc = peers.get(name);
     if (!pc) return;
     if (video.currentTime !== lastTime) {
@@ -241,32 +276,68 @@ async function runStream(name, ctl) {
   ctl.stop = () => { clearInterval(watchdog); stopStream(name); };
 
   for (;;) {
-    if (!ctl.active) break;
+    if (!alive()) break;
     try {
-      status.textContent = attempt ? 'reconnecting…' : 'connecting…';
+      status.textContent = ctl.attempt ? 'reconnecting…' : 'connecting…';
       status.hidden = false;
       const pc = await connect(name, video);
-      if (!ctl.active) { pc.close(); break; }  // suspended mid-handshake
-      attempt = 0;
+      if (!alive()) { pc.close(); break; }  // suspended mid-handshake
+      ctl.attempt = 0;
       lastTime = -1;
       lastProgress = Date.now();
       status.hidden = true;
       await untilDead(pc);
     } catch (err) {
-      console.warn(name, err);
+      console.warn(new Date().toISOString(), name, err);
     }
-    if (!ctl.active) break;
+    if (!alive()) break;
     const pc = peers.get(name);
     if (pc) { try { pc.close(); } catch {} }
     peers.delete(name);
     video.srcObject = null;
-    attempt++;
-    const wait = Math.min(30000, 2000 * attempt);
+    ctl.attempt++;
+    const wait = Math.min(15000, 2000 * ctl.attempt);
     status.textContent = `offline — retrying in ${Math.round(wait / 1000)}s…`;
     status.hidden = false;
     await new Promise(r => { ctl.wake = r; setTimeout(r, wait); });
   }
 }
+
+// ---------- link supervisor (lossy links, tunnels) ----------
+
+// Ping the API on a timer. When the link comes back (ping succeeds after
+// failures, or the browser fires 'online'), tear down every peer and let
+// each tile reconnect from a clean handshake — this recovers wedge states
+// the per-tile watchdog cannot recognize, without a page reload.
+let linkDown = false;
+
+function recoverAll(reason) {
+  window.__rc = (window.__rc || 0) + 1;  // test/debug hook
+  console.log(new Date().toISOString(), 'camview:', reason, '— restarting all streams');
+  for (const [name, ctl] of streamCtls) {
+    const pc = peers.get(name);
+    if (pc) { try { pc.close(); } catch {} }
+    peers.delete(name);
+    ctl.attempt = 0;
+    if (ctl.active && ctl.wake) ctl.wake();  // interrupt any backoff sleep
+  }
+}
+
+async function pingLink() {
+  try {
+    const res = await fetch('api/me.php', { cache: 'no-store' });
+    if (!res.ok) throw new Error(String(res.status));
+    if (linkDown) recoverAll('link restored');
+    linkDown = false;
+    document.getElementById('linkdown').hidden = true;
+  } catch {
+    if (!linkDown) console.warn(new Date().toISOString(), 'camview: link lost');
+    linkDown = true;
+    document.getElementById('linkdown').hidden = false;
+  }
+}
+setInterval(() => { if (document.visibilityState === 'visible') pingLink(); }, 8000);
+window.addEventListener('online', () => { pingLink(); recoverAll('browser online'); });
 
 // Stop all streaming while the page is hidden — no decode, no network, and
 // the server stops pulling idle cameras — then reconnect on return.
@@ -285,6 +356,7 @@ document.addEventListener('visibilitychange', () => {
       if (!ctl.active) { ctl.active = true; runStream(name, ctl); }
     }
     refreshDots();
+    pingLink();  // re-evaluate the link immediately on return
     // mobile browsers suspend the AudioContext in the background — wake it
     // and re-light the amber bell if the unlock could not be refreshed
     if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
