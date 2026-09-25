@@ -158,6 +158,23 @@ async def main():
         await asyncio.sleep(0.5)
         val = await js("document.getElementById('f-sens') ? document.getElementById('f-sens').value : 'NO SENS'")
         check("slider round-trips to 7", val == "7", (diag, click2, val))
+        vt = await js("document.getElementById('f-vtranscode').checked")
+        check("transcode video checkbox starts unchecked", vt is False, vt)
+        await js("document.getElementById('f-vtranscode').checked = true")
+        await js("document.getElementById('save').click()")
+        await asyncio.sleep(2)
+        r = await send("Runtime.evaluate", {"expression": """(async function(){
+          const j = await (await fetch('api/cameras.php?all=1')).json();
+          return JSON.stringify((j.find(x => x.name === 'testcam') || {}).transcode_video === true);
+        })()""", "returnByValue": True, "awaitPromise": True})
+        check("transcode video saved from edit modal",
+              r.get("result", {}).get("result", {}).get("value") == "true", r)
+        # restore: untick and save again
+        await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=edit]').click()")
+        await asyncio.sleep(0.5)
+        await js("document.getElementById('f-vtranscode').checked = false")
+        await js("document.getElementById('save').click()")
+        await asyncio.sleep(2)
         await js("document.getElementById('cancel').click()")
 
         print("== motion zone editor ==")

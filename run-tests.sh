@@ -42,6 +42,7 @@ paths:
   test:
   mov:
   static:
+  hev:
 EOF
 cat > /tmp/mtx-test-main.yml << 'EOF'    # the instance the app manages
 logLevel: warn
@@ -79,6 +80,11 @@ sleep 1   # let the RTSP ports bind before the fake cameras connect
   -f lavfi -i color=c=red:size=640x480:rate=25 \
   -c:v libx264 -preset ultrafast -g 25 -rtsp_transport tcp \
   -f rtsp rtsp://127.0.0.1:18554/static > /tmp/ff_static.log 2>&1 & PIDS+=($!)
+# HEVC camera (browsers cannot play it; needs transcode video)
+./bin/ffmpeg -hide_banner -loglevel error -re \
+  -f lavfi -i testsrc=size=640x360:rate=25 \
+  -c:v libx265 -preset ultrafast -g 25 -x265-params log-level=error -rtsp_transport tcp \
+  -f rtsp rtsp://127.0.0.1:18554/hev > /tmp/ff_hev.log 2>&1 & PIDS+=($!)
 
 # --- app under PHP's built-in server, pointed at the scratch MediaMTX ---
 # random port: an orphaned server from a previous run must never shadow us
@@ -264,6 +270,23 @@ if [ "$RW_RC" -eq 0 ] || [ "$RW_ELAPSED" -ge 25 ]; then
   echo "FAIL: ffmpeg hung on a dead socket despite -timeout"; exit 1
 fi
 echo "rtsp socket timeout: ok"
+
+# --- transcode video: HEVC in -> H264 out through transcode.py ---
+curl -sf -X POST "http://127.0.0.1:29997/v3/config/paths/add/hevout" \
+  -H 'Content-Type: application/json' -d '{}' \
+  || { echo "FAIL: cannot add hevout path"; exit 1; }
+timeout 30 python3 transcode.py rtsp://127.0.0.1:18554/hev rtsp://127.0.0.1:28554/hevout h264 \
+  > /tmp/tcv.log 2>&1 & PIDS+=($!)
+HEV_OK=0
+for i in $(seq 1 12); do
+  sleep 1
+  TR=$(curl -sf "http://127.0.0.1:29997/v3/paths/get/hevout" 2>/dev/null || true)
+  case "$TR" in
+    *H264*) HEV_OK=1; break;;
+  esac
+done
+[ "$HEV_OK" = 1 ] || { echo "FAIL: transcode h264 produced no H264 track"; cat /tmp/tcv.log; exit 1; }
+echo "transcode video (HEVC->H264): ok"
 
 reset_state() {
   rm -rf "$WORK/snapshots" "$WORK/motion"

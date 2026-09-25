@@ -178,6 +178,12 @@ config UI's *Test connection* button tells you what the camera sends:
   to G.711 in its own web interface, or tick **Transcode audio** on the
   camera (an on-demand ffmpeg copies video, transcodes audio to Opus).
 
+Video codecs work the same way: H.264 plays everywhere. `HEVC` (H.265)
+**cannot** play in any browser over WebRTC — switch the camera to H.264 in
+its own interface if you can (free), or tick **Transcode video** on the
+camera (an on-demand ffmpeg re-encodes to H.264; costs CPU while watched).
+The connection test on the Cameras page detects HEVC and says so.
+
 Tiles start muted (browser autoplay rules) — click the 🔊 button.
 
 ## Updating a deployment

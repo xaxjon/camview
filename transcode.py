@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""RunOnDemand wrapper: transcode a camera's audio to Opus and republish.
+"""RunOnDemand wrapper: transcode a camera for browser playback.
 
-Usage: transcode.py <rtsp-source> <rtsp-publish-url>
+Usage: transcode.py <rtsp-source> <rtsp-publish-url> [h264]
+
+Copies the video (or re-encodes to H.264 with the third arg — HEVC cameras,
+which browsers cannot play over WebRTC) and transcodes audio to Opus.
 
 Wraps ffmpeg with a stall watchdog. ffmpeg blocked in a network read
 ignores MediaMTX's SIGINT and leaks forever (frozen camera, WiFi drop).
@@ -44,9 +47,13 @@ def die(*_):
 
 def main():
     global proc
-    if len(sys.argv) != 3:
-        sys.exit(f"usage: {sys.argv[0]} <rtsp-source> <rtsp-publish-url>")
+    if len(sys.argv) not in (3, 4):
+        sys.exit(f"usage: {sys.argv[0]} <rtsp-source> <rtsp-publish-url> [h264]")
     source, out = sys.argv[1], sys.argv[2]
+    # third arg: 'h264' re-encodes the video (HEVC cameras — browsers only
+    # play H.264/VP8/VP9/AV1 over WebRTC); default is a cheap stream copy
+    vargs = ["-c:v", "copy"] if len(sys.argv) == 3 else [
+        "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30"]
 
     signal.signal(signal.SIGINT, die)
     signal.signal(signal.SIGTERM, die)
@@ -55,7 +62,7 @@ def main():
         [
             FFMPEG, "-hide_banner", "-loglevel", "error", "-nostats",
             "-rtsp_transport", "tcp", "-i", source,
-            "-c:v", "copy", "-c:a", "libopus", "-ar", "48000", "-ac", "2", "-b:a", "64k",
+            *vargs, "-c:a", "libopus", "-ar", "48000", "-ac", "2", "-b:a", "64k",
             "-rtsp_transport", "tcp", "-f", "rtsp", out,
         ],
         stdout=subprocess.DEVNULL,

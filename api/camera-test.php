@@ -39,4 +39,8 @@ if (preg_match('/Stream #.*Audio: ([a-z0-9_]+)(, (\d+) Hz)?/i', $out, $am)) {
 } else {
     $res['hint'] = 'no audio track';
 }
+// HEVC video can never play in a browser over WebRTC
+if (strtoupper($vm[1]) === 'HEVC') {
+    $res['hint'] = 'HEVC (H.265) video cannot play in browsers — set the camera to H.264, or tick "transcode video"';
+}
 json_out($res);

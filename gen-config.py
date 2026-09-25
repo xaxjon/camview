@@ -123,10 +123,12 @@ def main():
             "runOnDemandCloseAfter": "10s",
         }
 
-        if s.get("transcode_audio"):
+        if s.get("transcode_audio") or s.get("transcode_video"):
             if not FFMPEG.exists():
-                sys.exit(f"{name}: transcode_audio needs {FFMPEG} — run ./setup.sh first")
+                sys.exit(f"{name}: transcode needs {FFMPEG} — run ./setup.sh first")
             cmd = TRANSCODE_CMD.format(wrapper=ROOT / "transcode.py", source=raw)
+            if s.get("transcode_video"):
+                cmd += " h264"  # re-encode HEVC -> H.264 for browsers
             lines.append(
                 f"  {name}:\n"
                 f"    runOnDemand: {cmd}\n"

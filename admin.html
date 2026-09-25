@@ -118,6 +118,8 @@
         <input type="text" id="f-source" placeholder="rtsp://user:pass@ip:554/..."></div>
       <label class="cb"><input type="checkbox" id="f-transcode"> Transcode audio
         <span class="badge">needed for AAC cameras</span></label>
+      <label class="cb"><input type="checkbox" id="f-vtranscode"> Transcode video
+        <span class="badge">HEVC cameras — browsers only play H.264</span></label>
       <label class="cb"><input type="checkbox" id="f-motion"> Motion detection
         <span class="badge">records JPEGs, see Motion page</span></label>
       <div class="row" id="motion-sens-row" style="display:none">
@@ -202,7 +204,7 @@ async function refresh() {
     tr.cells[2].title = c.source;
     tr.querySelector('[data-act=toggle]').addEventListener('change', async e => {
       await api('cameras.php', 'PUT', { original: c.name, name: c.name, source: c.source,
-        transcode_audio: c.transcode_audio, motion: c.motion,
+        transcode_audio: c.transcode_audio, transcode_video: c.transcode_video, motion: c.motion,
         motion_threshold: c.motion_threshold, motion_source: c.motion_source,
         motion_zone: c.motion_zone,
         enabled: e.target.checked });
@@ -226,6 +228,7 @@ function openModal(cam) {
   document.getElementById('f-name').value = cam ? cam.name : '';
   document.getElementById('f-source').value = cam ? cam.source : '';
   document.getElementById('f-transcode').checked = cam ? cam.transcode_audio : false;
+  document.getElementById('f-vtranscode').checked = cam ? !!cam.transcode_video : false;
   document.getElementById('f-motion').checked = cam ? !!cam.motion : false;
   // sensitivity slider 0-9  <->  threshold 0.10..0.01 (5 = default 0.05)
   const thr = cam && cam.motion_threshold != null ? cam.motion_threshold : 0.05;
@@ -277,6 +280,7 @@ document.getElementById('save').addEventListener('click', async () => {
     name: document.getElementById('f-name').value.trim(),
     source: document.getElementById('f-source').value.trim(),
     transcode_audio: document.getElementById('f-transcode').checked,
+    transcode_video: document.getElementById('f-vtranscode').checked,
     motion: document.getElementById('f-motion').checked,
     motion_threshold: 0.10 - 0.01 * parseInt(document.getElementById('f-sens').value, 10),
     motion_zone: editing ? editingZone : null,
@@ -386,7 +390,8 @@ document.getElementById('zone-accept').addEventListener('click', async () => {
   try {
     await api('cameras.php', 'PUT', {
       original: zoneCam.name, name: zoneCam.name, source: zoneCam.source,
-      transcode_audio: zoneCam.transcode_audio, motion: zoneCam.motion,
+      transcode_audio: zoneCam.transcode_audio, transcode_video: zoneCam.transcode_video,
+      motion: zoneCam.motion,
       motion_threshold: zoneCam.motion_threshold, motion_source: zoneCam.motion_source,
       enabled: zoneCam.enabled, motion_zone: zoneRect,
     });

@@ -175,6 +175,7 @@ function load_cameras(): array {
             'name' => $s['name'],
             'source' => $s['source'],
             'transcode_audio' => !empty($s['transcode_audio']),
+            'transcode_video' => !empty($s['transcode_video']),
             'enabled' => ($s['enabled'] ?? true) !== false,
             'motion' => !empty($s['motion']),
             'motion_threshold' => isset($s['motion_threshold']) ? (float) $s['motion_threshold'] : null,
@@ -190,6 +191,7 @@ function save_cameras(array $cams): void {
     foreach ($cams as $c) {
         $e = ['name' => $c['name'], 'source' => $c['source']];
         if (!empty($c['transcode_audio'])) $e['transcode_audio'] = true;
+        if (!empty($c['transcode_video'])) $e['transcode_video'] = true;
         if (isset($c['enabled']) && !$c['enabled']) $e['enabled'] = false;
         if (!empty($c['motion'])) $e['motion'] = true;
         if (!empty($c['motion_threshold'])) $e['motion_threshold'] = (float) $c['motion_threshold'];
@@ -265,6 +267,7 @@ function apply_camera_changes(array $old, array $new): void {
     foreach ($new as $n) {
         $o = $oldByName[$n['name']] ?? null;
         if (!$o || $o['source'] !== $n['source'] || $o['transcode_audio'] !== $n['transcode_audio']
+            || ($o['transcode_video'] ?? false) !== ($n['transcode_video'] ?? false)
             || $o['enabled'] !== $n['enabled']) {
             $add[] = $n['name'];  // new, or replaced via delete+add
         }
