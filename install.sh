@@ -85,6 +85,9 @@ chown -R "$REAL_USER:$WEB_USER" .
 find . -type d -not -path './.git/*' -exec chmod 2775 {} +
 chmod 0660 streams.json mediamtx.yml users.json
 
+URL_PATH="${DIR#/var/www/html}"
+URL_PATH="${URL_PATH:-/}"
+
 # ---------- systemd service ----------
 
 if [ "${SKIP_SYSTEMD:-}" = 1 ]; then
@@ -105,10 +108,39 @@ else
     || { echo "   camview-motion FAILED to start — check: journalctl -u camview-motion -n 30" >&2; exit 1; }
 fi
 
+# ---------- apache ----------
+
+if [ "${SKIP_APACHE:-}" = 1 ]; then
+  echo "== SKIP_APACHE=1, not configuring Apache"
+elif command -v apache2ctl > /dev/null 2>&1; then
+  echo "== configuring Apache"
+  # the app needs mod_php, not just php-cli
+  if ! apache2ctl -M 2>/dev/null | grep -qi 'php'; then
+    echo "   installing libapache2-mod-php"
+    apt-get install -y libapache2-mod-php || true
+  fi
+  apache2ctl -M 2>/dev/null | grep -qi 'php' \
+    || { echo "   ERROR: Apache PHP module still missing — the app will not work" >&2; exit 1; }
+  # protection that does NOT depend on AllowOverride (the stock .htaccess
+  # is silently ignored when the vhost has AllowOverride None)
+  sed "s|__DIR__|$DIR|g" apache.conf > /etc/apache2/conf-available/camview.conf
+  a2enconf camview > /dev/null
+  systemctl reload apache2
+  echo "   camview.conf enabled (data files + motion/ + snapshots/ + .git denied)"
+  # prove it
+  if curl -sf -o /dev/null "http://127.0.0.1${URL_PATH%/}/streams.json"; then
+    echo "   WARNING: streams.json is STILL downloadable — check the vhost config" >&2
+  else
+    echo "   verified: streams.json is not downloadable"
+  fi
+else
+  echo "== Apache not detected"
+  echo "   serve $DIR with any web server + PHP, but you MUST deny direct"
+  echo "   download of: *.json, mediamtx.yml, motion/, snapshots/, .git"
+fi
+
 # ---------- done ----------
 
-URL_PATH="${DIR#/var/www/html}"
-URL_PATH="${URL_PATH:-/}"
 echo
 echo "Done. Next steps:"
 echo "  1. open http://<this-host>${URL_PATH%/}/setup.html  (create the admin)"

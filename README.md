@@ -43,56 +43,73 @@ user management and a camera config UI. No build step, no framework.
 
 ## Requirements
 
-- Linux x86_64 or aarch64
-- **PHP 8+** with curl (for the login/config backend) and a web server
-  (Apache, or `php -S` for a quick look)
-- **python3** (runs `gen-config.py` to regenerate the MediaMTX config)
-- MediaMTX + ffmpeg binaries: not in the repo — run `./setup.sh` once
+- Linux x86_64 or aarch64 (the commands below are Debian/Ubuntu)
+- **Apache + mod_php** (`apache2 libapache2-mod-php php-curl`) — the app is
+  plain PHP pages + a JSON API; php-cli alone is not enough
+- **python3** (generates the MediaMTX config and runs the wrappers)
+- MediaMTX + ffmpeg binaries: downloaded by the installer (`setup.sh`)
 
-## Setup
+## Deploy (fresh Ubuntu/Debian server)
 
-New server, from scratch:
+The app belongs in the web tree, not your home directory:
 
 ```sh
-git clone https://github.com/xaxjon/camview.git
-cd camview
+# 1. packages
+sudo apt update
+sudo apt install -y git curl tar python3 apache2 libapache2-mod-php php-curl
+
+# 2. code — you own the tree (git pull works), web server is the group
+sudo git clone https://github.com/xaxjon/camview.git /var/www/html/camview
+sudo chown -R "$USER":www-data /var/www/html/camview
+cd /var/www/html/camview
+
+# 3. install
 sudo ./install.sh
 ```
 
-The installer checks prerequisites (offers to `apt install` missing ones,
-including `php-curl`), downloads the MediaMTX + ffmpeg binaries, creates
-the data files, generates `mediamtx.yml`, sets ownership so both
-`git pull` (as you) and config saves (as the web server) work, and
-installs + starts the `mediamtx-viewer` systemd service with the correct
-paths for the actual directory.
+The installer:
+- checks prerequisites (offers to `apt install` what is missing)
+- downloads `bin/mediamtx` + `bin/ffmpeg`
+- creates the data files, generates `mediamtx.yml`
+- sets ownership so `git pull` (as you) and config saves (as www-data) work
+- installs + starts the `mediamtx-viewer` and `camview-motion` services
+- installs + enables `/etc/apache2/conf-available/camview.conf` (from
+  `apache.conf`), which blocks direct download of `streams.json`,
+  `users.json`, `settings.json`, `mediamtx.yml`, `motion/`, `snapshots/`
+  and `.git` — this works even when the vhost has `AllowOverride None`,
+  which silently disables the shipped `.htaccess` files — and then
+  verifies the block with a probe
 
-Then open `http://<host>/<path>/setup.html` once to create the first
-admin and log in. The viewer grid is `index.html`; admins also get
-**Cameras** and **Users** pages.
+Ports to open / forward:
 
-### Manual setup (if you prefer not to run the installer)
+| Port | Use |
+|------|-----|
+| 80/TCP (or your HTTPS vhost) | web UI + API |
+| 8889/TCP | WHEP (WebRTC signalling) |
+| 8189/UDP | WebRTC media |
+
+Finish in the browser:
+
+1. `http://<server>/camview/setup.html` — create the first admin
+   (only works while no users exist)
+2. Log in → **Cameras** → add your RTSP cameras (motion/zones optional)
+3. Verify credentials are protected:
+   `curl -sI http://<server>/camview/streams.json | head -1` → expect `403`
+
+The app works at any URL path (all API calls are relative), so installing
+at the docroot (`/var/www/html`) serves it at `/`.
+
+### Without Apache (dev / quick look)
 
 ```sh
-./setup.sh                          # downloads bin/mediamtx + bin/ffmpeg
+./setup.sh                       # downloads bin/mediamtx + bin/ffmpeg
 cp streams.json.example streams.json
+php -S 127.0.0.1:8080            # UI + API
+./start.sh                       # or just MediaMTX + static viewer on :8080
 ```
 
-Either run manually without PHP features:
+`php -S` does not read `.htaccess` — fine on localhost, never expose it.
 
-```sh
-./start.sh                          # MediaMTX + viewer on :8080
-```
-
-…or install the service yourself (replace `__DIR__` in
-`mediamtx-viewer.service` with the install path, `systemctl enable --now`).
-The web server group must be able to write the install directory and the
-data files (`streams.json`, `mediamtx.yml`, `users.json`, `snapshots/`):
-
-```sh
-sudo chown -R "$USER":www-data .
-sudo find . -type d -not -path './.git/*' -exec chmod 2775 {} +
-sudo chmod 660 streams.json mediamtx.yml users.json
-```
 
 ## Motion detection
 
@@ -181,10 +198,14 @@ touches them.
 
 ## Security notes
 
-- `streams.json` / `users.json` / `mediamtx.yml` contain credentials and
-  are git-ignored **and** denied by the shipped `.htaccess` (needs
-  `AllowOverride` on Apache). Camera source URLs are never sent to
-  non-admin browsers; snapshots and the grid use server-side lookups.
+- `streams.json` / `users.json` / `settings.json` / `mediamtx.yml` contain
+  credentials and are git-ignored **and** denied two ways: the shipped
+  `.htaccess` (only when the vhost allows overrides) and the
+  `conf-available/camview.conf` snippet that `install.sh` installs (works
+  regardless of `AllowOverride`). Verify after install:
+  `curl -sI http://<host>/<path>/streams.json | head -1` → `403`.
+  Camera source URLs are never sent to non-admin browsers; snapshots and
+  the grid use server-side lookups.
 - The MediaMTX WebRTC port (TCP 8889 + UDP 8189) is unauthenticated by
   design — firewall it to trusted networks.
 - Use HTTPS in front of Apache if logins cross untrusted links.
