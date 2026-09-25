@@ -72,6 +72,17 @@ check("invalid name rejected", s == 400)
 s, j = api("cameras.php", "POST", {"name": "ok", "source": "http://x"}, csrf)
 check("non-rtsp source rejected", s == 400)
 
+# mediamtx drift: a leftover path (partial earlier save, manual restart)
+# must not make every later save fail with 502
+req = urllib.request.Request(MTX + "/v3/config/paths/add/driftcam__raw",
+                             data=b'{"source":"rtsp://x"}',
+                             headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req) as r:
+    r.read()
+s, j = api("cameras.php", "POST", {"name": "driftcam", "source": "rtsp://127.0.0.1:18554/test"}, csrf)
+check("save succeeds despite drifted leftover path", s == 200, j)
+api("cameras.php", "DELETE", {"name": "driftcam"}, csrf)
+
 s, j = api("cameras.php")
 row = next((c for c in j if c["name"] == "testcam"), {})
 check("admin sees source + status", row.get("source", "").startswith("rtsp://") and "status" in row, row)

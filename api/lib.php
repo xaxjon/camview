@@ -290,6 +290,10 @@ function apply_camera_changes(array $old, array $new): void {
         if (!in_array($r['code'], [200, 404], true)) json_err("mediamtx delete failed for $name", 502);
     }
     foreach ($addPaths as $name) {
+        // delete first: mediamtx refuses to add an existing path (400), and a
+        // drifted leftover (partial earlier save, manual restart) would
+        // otherwise make every save fail forever
+        mtx_api('DELETE', '/v3/config/paths/delete/' . rawurlencode($name));
         $r = mtx_api('POST', '/v3/config/paths/add/' . rawurlencode($name), $paths[$name]);
         if ($r['code'] !== 200) json_err("mediamtx add failed for $name", 502);
     }
