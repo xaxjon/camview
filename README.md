@@ -54,7 +54,8 @@ user management and a camera config UI. No build step, no framework.
 The app belongs in the web tree, not your home directory:
 
 ```sh
-# 1. packages
+# 1. packages (skip this if you like — the installer offers to apt-install
+#    whatever is missing, Apache included)
 sudo apt update
 sudo apt install -y git curl tar python3 apache2 libapache2-mod-php php-curl
 

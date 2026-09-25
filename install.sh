@@ -45,6 +45,8 @@ command -v php     > /dev/null || missing+=(php-cli)
 if command -v php > /dev/null && ! php -m 2>/dev/null | grep -qi '^curl$'; then
   missing+=(php-curl)
 fi
+# the app is served by Apache + mod_php; pull them in when absent
+command -v apache2ctl > /dev/null || missing+=(apache2 libapache2-mod-php)
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "missing packages: ${missing[*]}"
