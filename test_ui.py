@@ -103,6 +103,7 @@ async def main():
         n = await js("document.querySelectorAll('.tile').length")
         check("grid shows example cameras", n == 2, n)
         check("admin link visible", await js("!document.getElementById('admin-link').hidden"))
+        check("system link visible on viewer for admin", await js("!document.getElementById('system-link').hidden"))
         check("tiles have status dots", await js("document.querySelectorAll('.tile .dot').length") == 2)
         check("tiles have snapshot buttons", await js("document.querySelectorAll('.tile .snap').length") == 2)
 
