@@ -229,18 +229,25 @@ s, j = api("system.php")
 check("system stats shape", s == 200 and j["disk"]["total"] > 0 and 0 <= j["cpu"] <= 100
       and j["mem"]["total"] > 0 and len(j["load"]) == 3 and "rx_rate" in j["net"]
       and j["cores"] >= 1, j)
-check("settings defaults", j.get("settings") == {"capture_fullres": True, "retention_days": 7}, j)
-s, j = api("system.php", "POST", {"settings": {"capture_fullres": False, "retention_days": 30}}, csrf)
-check("update settings", s == 200 and j.get("settings", {}).get("retention_days") == 30
-      and j.get("settings", {}).get("capture_fullres") is False, j)
+check("settings defaults", j.get("settings") == {"capture_fullres": True, "retention_days": 7,
+                                                 "max_storage_gb": 10}, j)
+s, j = api("system.php", "POST", {"settings": {"capture_fullres": False, "retention_days": 30,
+                                               "max_storage_gb": 25}}, csrf)
+check("update settings", s == 200 and j.get("settings") == {"capture_fullres": False,
+      "retention_days": 30, "max_storage_gb": 25}, j)
 sfile = json.loads(pathlib.Path("/tmp/camview-test/settings.json").read_text())
 check("settings persisted to disk", sfile.get("capture_fullres") is False
-      and sfile.get("retention_days") == 30, sfile)
+      and sfile.get("retention_days") == 30 and sfile.get("max_storage_gb") == 25, sfile)
 s, j = api("system.php", "POST", {"settings": {"capture_fullres": True, "retention_days": 99}}, csrf)
 check("invalid retention rejected", s == 400, j)
-s, j = api("system.php", "POST", {"settings": {"capture_fullres": True, "retention_days": 7}}, csrf)
+s, j = api("system.php", "POST", {"settings": {"capture_fullres": True, "retention_days": 7,
+                                               "max_storage_gb": 0}}, csrf)
+check("invalid storage cap rejected", s == 400, j)
+s, j = api("system.php", "POST", {"settings": {"capture_fullres": True, "retention_days": 7,
+                                               "max_storage_gb": 10}}, csrf)
 check("settings reset to defaults", s == 200
-      and j.get("settings") == {"capture_fullres": True, "retention_days": 7}, j)
+      and j.get("settings") == {"capture_fullres": True, "retention_days": 7,
+                                "max_storage_gb": 10}, j)
 # seed old + recent files
 work = pathlib.Path("/tmp/camview-test")
 old_day = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()

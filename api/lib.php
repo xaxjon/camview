@@ -15,13 +15,14 @@ const SNAPSHOT_RE = '/^[a-zA-Z0-9_-]+-\d{8}-\d{6}(-\d+)?\.jpg$/';
 // ---------- settings store (system page) ----------
 
 const SETTINGS_FILE = CAMVIEW_ROOT . '/settings.json';
-const SETTINGS_DEFAULTS = ['capture_fullres' => true, 'retention_days' => 7];
+const SETTINGS_DEFAULTS = ['capture_fullres' => true, 'retention_days' => 7, 'max_storage_gb' => 10];
 
 function load_settings(): array {
     $d = json_decode((string) @file_get_contents(SETTINGS_FILE), true);
     return [
         'capture_fullres' => !isset($d['capture_fullres']) || !empty($d['capture_fullres']),
         'retention_days' => isset($d['retention_days']) ? max(1, min(90, (int) $d['retention_days'])) : 7,
+        'max_storage_gb' => isset($d['max_storage_gb']) ? max(1, min(500, (int) $d['max_storage_gb'])) : 10,
     ];
 }
 

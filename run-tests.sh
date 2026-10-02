@@ -180,7 +180,7 @@ sleep 25
 MOV_COUNT=$(find "$MWORK/motion/mov" -name 'mov-*.jpg' 2>/dev/null | wc -l)
 STATIC_COUNT=$(find "$MWORK/motion/static" -name 'static-*.jpg' 2>/dev/null | wc -l)
 echo "motion supervisor: mov=$MOV_COUNT jpegs, static=$STATIC_COUNT jpegs"
-if [ "$MOV_COUNT" -lt 2 ]; then echo "FAIL: moving camera produced <2 jpegs"; exit 1; fi
+if [ "$MOV_COUNT" -lt 2 ]; then echo "FAIL: moving camera produced <2 jpegs"; grep -vE "showinfo" "$MWORK/log.txt" | tail -20; exit 1; fi
 if [ "$STATIC_COUNT" -gt 0 ]; then echo "FAIL: static camera produced jpegs"; exit 1; fi
 [ -f "$MWORK/motion/.htaccess" ] || { echo "FAIL: motion .htaccess missing"; exit 1; }
 echo "motion supervisor: ok"
@@ -258,6 +258,28 @@ if [ "$FULL_DIMS" != "640x480" ] || [ "$LOW_OK" != "1" ]; then
   grep -E 'started mov|stopping mov' "$MWORK/log.txt" | tail -4; exit 1
 fi
 echo "capture size setting: ok ($FULL_DIMS -> $LOW_DIMS)"
+
+# --- storage cap: prune drops oldest day-dirs when motion/ exceeds it ---
+python3 - << 'EOF'
+import importlib.util, os, pathlib, shutil
+os.environ["MOTION_DIR"] = "/tmp/prune-test"
+shutil.rmtree("/tmp/prune-test", ignore_errors=True)
+for cam in ("a", "b"):
+    for day in ("2026-09-30", "2026-10-01", "2026-10-02"):
+        d = pathlib.Path(f"/tmp/prune-test/{cam}/{day}")
+        d.mkdir(parents=True)
+        (d / "x.jpg").write_bytes(b"\xff\xd8" + b"\0" * 40000)  # 40KB per day-dir
+spec = importlib.util.spec_from_file_location("m", "/tmp/camview-motion-test/motion.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.SETTINGS = pathlib.Path("/tmp/prune-test-settings.json")
+# long retention (age-prune inert), cap ~84KB -> keeps only the newest day
+m.SETTINGS.write_text('{"retention_days": 365, "max_storage_gb": 0.00008}')
+m.prune()
+left = sorted(p.parent.name for p in pathlib.Path("/tmp/prune-test").rglob("*.jpg"))
+assert left == ["2026-10-02", "2026-10-02"], left
+print("prune storage cap: ok")
+EOF
 
 # --- RTSP -timeout: ffmpeg must error out of a silent socket on its own ---
 RW_START=$(date +%s)

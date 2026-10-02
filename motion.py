@@ -30,6 +30,9 @@ timestamp and deletes the trigger (checked roughly once a second).
 Global settings come from settings.json (edited on the System page):
     "capture_fullres": true   full-resolution captures (default) vs 480p
     "retention_days": 7       timeline retention (pruned hourly)
+    "max_storage_gb": 10      hard cap for motion/ — oldest day-dirs are
+                              pruned when exceeded (a storm week at full res
+                              cannot fill the disk)
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
 exit on its own, and the supervisor watches each child's *decoded-frame*
@@ -98,11 +101,14 @@ def get_settings():
         d = {}
     fullres = bool(d.get("capture_fullres", True))
     retention = int(d.get("retention_days", 7) or 7)
+    max_gb = float(d.get("max_storage_gb", 10) or 10)
     if ENV_FULLRES is not None:
         fullres = ENV_FULLRES != "0"
     if ENV_RETENTION is not None:
         retention = int(ENV_RETENTION)
-    return fullres, max(1, min(90, retention))
+    if os.environ.get("MOTION_MAX_GB"):
+        max_gb = float(os.environ["MOTION_MAX_GB"])
+    return fullres, max(1, min(90, retention)), max(0.1, max_gb)
 
 
 def parse_zone(z):
@@ -130,7 +136,7 @@ def load_config():
     except Exception as e:
         log(f"cannot read streams.json: {e}")
         return {}
-    fullres, _ = get_settings()
+    fullres, _, _ = get_settings()
     out = {}
     for s in data:
         if not isinstance(s, dict) or not s.get("name") or not s.get("source"):
@@ -392,8 +398,46 @@ def drain(timeout):
 
 
 def prune():
-    _, retention = get_settings()
+    _, retention, max_gb = get_settings()
     cutoff = date.today() - timedelta(days=retention)
+    for cam_dir in MOTION_DIR.iterdir() if MOTION_DIR.is_dir() else []:
+        if not cam_dir.is_dir():
+            continue
+        for day_dir in cam_dir.iterdir():
+            if not day_dir.is_dir():
+                continue
+            try:
+                if date.fromisoformat(day_dir.name) < cutoff:
+                    shutil.rmtree(day_dir, ignore_errors=True)
+                    log(f"pruned {day_dir}")
+            except ValueError:
+                continue
+    # hard storage cap: drop the oldest day-dirs (any camera) until the
+    # motion tree fits — a storm week at full res must never fill the disk
+    cap = int(max_gb * (1 << 30))
+    day_dirs = []
+    total = 0
+    for cam_dir in MOTION_DIR.iterdir() if MOTION_DIR.is_dir() else []:
+        if not cam_dir.is_dir():
+            continue
+        for day_dir in cam_dir.iterdir():
+            if not day_dir.is_dir():
+                continue
+            try:
+                date.fromisoformat(day_dir.name)
+            except ValueError:
+                continue
+            size = sum(f.stat().st_size for f in day_dir.rglob("*.jpg"))
+            day_dirs.append((day_dir.name, day_dir))
+            total += size
+    day_dirs.sort()  # oldest date first
+    for day, path in day_dirs:
+        if total <= cap:
+            break
+        size = sum(f.stat().st_size for f in path.rglob("*.jpg"))
+        shutil.rmtree(path, ignore_errors=True)
+        total -= size
+        log(f"pruned {path} (storage cap {max_gb}GB)")
     for cam_dir in MOTION_DIR.iterdir() if MOTION_DIR.is_dir() else []:
         if not cam_dir.is_dir():
             continue
@@ -422,7 +466,7 @@ def main():
         ht.write_text("Require all denied\n")
 
     last_prune = 0.0
-    fullres, retention = get_settings()
+    fullres, retention, _ = get_settings()
     log(f"watching {STREAMS} -> {MOTION_DIR} "
         f"(retention {retention}d, capture={'full' if fullres else '480p'})")
     while not shutdown:

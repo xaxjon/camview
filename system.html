@@ -108,9 +108,17 @@
             <option value="7">7 days</option>
             <option value="30">30 days</option>
           </select></div>
+        <div class="row"><label>Storage cap (oldest pruned first)</label>
+          <select id="s-maxgb">
+            <option value="5">5 GB</option>
+            <option value="10">10 GB</option>
+            <option value="25">25 GB</option>
+            <option value="50">50 GB</option>
+          </select></div>
         <button id="save-settings">Save</button><span id="settings-result"></span>
         <div class="sub">Full frame ≈ 190 KB/event (≈ 1 GB/week on this fleet);
-          480p ≈ 30 KB/event. Applies within a minute; retention prunes hourly.</div>
+          480p ≈ 30 KB/event. Applies within a minute; retention and the cap
+          prune hourly.</div>
       </div>
       <div class="card">
         <h2>Network</h2>
@@ -193,6 +201,7 @@ async function refresh() {
 function applySettings(s) {
   document.getElementById('s-fullres').value = s.capture_fullres ? '1' : '0';
   document.getElementById('s-retention').value = String(s.retention_days);
+  document.getElementById('s-maxgb').value = String(s.max_storage_gb || 10);
 }
 
 document.getElementById('save-settings').addEventListener('click', async () => {
@@ -202,6 +211,7 @@ document.getElementById('save-settings').addEventListener('click', async () => {
     const j = await api('system.php', 'POST', { settings: {
       capture_fullres: document.getElementById('s-fullres').value === '1',
       retention_days: parseInt(document.getElementById('s-retention').value, 10),
+      max_storage_gb: parseInt(document.getElementById('s-maxgb').value, 10),
     }});
     applySettings(j.settings);
     out.textContent = 'saved';

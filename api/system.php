@@ -36,9 +36,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $s = $b['settings'];
         $ret = (int) ($s['retention_days'] ?? 7);
         if ($ret < 1 || $ret > 90) json_err('retention_days must be between 1 and 90');
+        $cap = (int) ($s['max_storage_gb'] ?? 10);
+        if ($cap < 1 || $cap > 500) json_err('max_storage_gb must be between 1 and 500');
         $out = [
             'capture_fullres' => !empty($s['capture_fullres']),
             'retention_days' => $ret,
+            'max_storage_gb' => $cap,
         ];
         save_settings($out);
         json_out(['ok' => true, 'settings' => $out]);
