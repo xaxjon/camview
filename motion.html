@@ -444,7 +444,7 @@ document.addEventListener('keydown', e => {
 
 // ---------- page ----------
 
-async function refresh() {
+async function refresh(keepView) {
   data = await api('motion.php?range=' + range);
   document.getElementById('empty').hidden = data.cams.length > 0;
   let total = 0;
@@ -452,8 +452,28 @@ async function refresh() {
   document.getElementById('note').textContent =
     `${data.cams.length} camera(s), ${total} motion frame${total === 1 ? '' : 's'} recorded`;
   COLS = FULL().cols;
-  resetZoom();
+  if (keepView) {
+    // a zoomed view stays put; the default full view re-anchors to "now"
+    const now = Math.floor(Date.now() / 1000);
+    if (VIEW.span === FULL().span && Math.abs(VIEW.start + VIEW.span - now) < 180) {
+      VIEW = { start: now - FULL().span, span: FULL().span };
+    }
+    buildBuckets();
+    draw();
+  } else {
+    resetZoom();
+  }
 }
+
+// live updates: every 30s while visible, and immediately when returning to
+// the page (mobile users background the page for days — the timeline was
+// stale until a manual reload)
+setInterval(() => {
+  if (document.visibilityState === 'visible') refresh(true).catch(() => {});
+}, 30000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refresh(true).catch(() => {});
+});
 
 document.querySelectorAll('#controls button').forEach(btn => {
   btn.addEventListener('click', () => {

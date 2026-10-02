@@ -306,5 +306,8 @@ reset_state() {
 
 reset_state
 python3 test_api.py || exit 1
+grep -q "webrtcTrackGatherTimeout: 10s" "$WORK/mediamtx.yml" \
+  || { echo "FAIL: mediamtx.yml missing webrtcTrackGatherTimeout"; exit 1; }
+echo "webrtc track gather timeout: ok"
 reset_state
 python3 test_ui.py || exit 1

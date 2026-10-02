@@ -534,6 +534,7 @@ function makeTile(stream) {
   });
 
   grid.appendChild(tile);
+  layout();
   const ctl = { active: true, video, status, stop: null, wake: null };
   streamCtls.set(stream.name, ctl);
   runStream(stream.name, ctl);
@@ -594,16 +595,20 @@ async function init() {
     return;
   }
   count.textContent = `${streams.length} camera${streams.length > 1 ? 's' : ''}`;
-  streams.forEach(makeTile);
+  // stagger the initial connects: N cameras spinning up sanitize+transcode
+  // at once on a small server can push first-track past the timeouts
+  streams.forEach((s, i) => setTimeout(() => makeTile(s), i * 250));
   layout();
   // if bells are armed from a previous visit, audio starts blocked until
   // the first tap — show the amber bell immediately so it can't be missed
   if (streams.some(s => bellOn(s.name))) {
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      audioCtx.onstatechange = updateBellAudioState;
-    } catch {}
-    updateBellAudioState();
+    setTimeout(() => {  // tiles are created staggered; wait for the bells
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.onstatechange = updateBellAudioState;
+      } catch {}
+      updateBellAudioState();
+    }, streams.length * 250 + 300);
   }
   refreshDots();
   // skip polling while hidden — the page resumes it via visibilitychange

@@ -51,6 +51,10 @@ moq: false
 webrtc: true
 webrtcAddress: :8889
 webrtcAllowOrigins: ["*"]
+# default 2s kills the session when a cold sanitize+transcode chain takes
+# 3-6s to deliver the first track — the classic "tiles blank on first load,
+# fine after reload" symptom
+webrtcTrackGatherTimeout: 10s
 
 hls: false
 

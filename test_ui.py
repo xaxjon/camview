@@ -312,6 +312,22 @@ async def main():
         check("lanes have camera thumbnails", thumbs == 2, thumbs)
         tsrc = await js("[...document.querySelectorAll('.lane')].find(l => l.textContent.includes('testcam')).querySelector('.camthumb').src")
         check("thumbnail is latest motion jpeg", isinstance(tsrc, str) and "motion.php?file=" in tsrc, tsrc)
+        # returning to the page (mobile background/foreground) refreshes data
+        thumb0 = await js("[...document.querySelectorAll('.lane')].find(l => l.textContent.includes('testcam')).querySelector('.camthumb').src")
+        daydir = pathlib.Path("/tmp/camview-test/motion/testcam") / datetime.date.today().isoformat()
+        (daydir / f"testcam-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jpg").write_bytes(b"\xff\xd8z")
+        await js("""Object.defineProperty(document, 'visibilityState', {get: () => 'hidden', configurable: true});
+                    document.dispatchEvent(new Event('visibilitychange'))""")
+        await asyncio.sleep(0.5)
+        await js("""Object.defineProperty(document, 'visibilityState', {get: () => 'visible', configurable: true});
+                    document.dispatchEvent(new Event('visibilitychange'))""")
+        thumb1 = thumb0
+        for _ in range(10):
+            await asyncio.sleep(1)
+            thumb1 = await js("[...document.querySelectorAll('.lane')].find(l => l.textContent.includes('testcam')).querySelector('.camthumb').src")
+            if thumb1 != thumb0:
+                break
+        check("motion page refreshes on return", thumb1 != thumb0, (thumb0, thumb1))
         # hover the rightmost bucket that has files in the testcam lane
         pt = await js("""(function(){
           const m = buckets['testcam'];
