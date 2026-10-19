@@ -30,6 +30,10 @@
   .tile { position: relative; background: #000; overflow: hidden;
     border: 1px solid #2a2a2a; border-radius: 4px; cursor: pointer; }
   .tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .tile.dewarp > video { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+  .tile .dewarp-canvas { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%;
+    object-fit: contain; display: block; background: #000; pointer-events: none; }
+  .tile .label, .tile .dot, .tile .status, .tile .btn, .tile .toast { z-index: 1; }
   .tile:fullscreen { border: none; border-radius: 0; cursor: default; }
 
   .tile .label { position: absolute; left: 0; bottom: 0; padding: 2px 8px;
@@ -244,11 +248,13 @@ function stopStream(name) {
   const pc = peers.get(name);
   if (pc) { try { pc.close(); } catch {} }
   peers.delete(name);
+  ctl.dewarp?.stop();
   ctl.video.srcObject = null;
 }
 
 async function runStream(name, ctl) {
   const { video, status } = ctl;
+  ctl.dewarp?.start();
   const myGen = ctl.gen || 0;
   // a stale loop (suspended mid-sleep, then resumed) must never touch shared
   // state again — otherwise two loops fight over peers and the tile wedges
@@ -448,6 +454,177 @@ async function pollMotion() {
 }
 setInterval(() => { if (document.visibilityState === 'visible') pollMotion(); }, 2000);
 
+// ---------- UniFi 360 dual-panorama dewarp ----------
+
+// Normalized circle calibration from the G6 Pro 360 research capture:
+// center x / frame width, center y / frame height, radius / frame height.
+const DEWARP_CIRCLE = [0.519201, 0.499414, 0.494428];
+const DEWARP_VERTEX_SHADER = `#version 300 es
+in vec2 aPosition;
+void main() { gl_Position = vec4(aPosition, 0.0, 1.0); }
+`;
+const DEWARP_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D uFrame;
+uniform vec2 uOutputSize;
+uniform vec2 uSourceSize;
+uniform vec3 uCircle;
+uniform float uSeparator;
+out vec4 outColor;
+const float PI = 3.141592653589793;
+
+void main() {
+  // gl_FragCoord starts at the bottom-left; the calibration starts at the top-left.
+  vec2 p = vec2(gl_FragCoord.x, uOutputSize.y - gl_FragCoord.y);
+  float stripHeight = (uOutputSize.y - uSeparator) * 0.5;
+  if (p.y >= stripHeight && p.y < stripHeight + uSeparator) {
+    outColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  float strip = p.y < stripHeight ? 0.0 : 1.0;
+  float yLocal = p.y - strip * (stripHeight + uSeparator);
+  float u = p.x / uOutputSize.x;
+  float v = yLocal / stripHeight;
+  float phi = (strip + u) * PI;
+  float rho = (1.0 - v) * uCircle.z * uSourceSize.y;
+  vec2 source = vec2(
+    uCircle.x * uSourceSize.x + rho * cos(phi),
+    uCircle.y * uSourceSize.y + rho * sin(phi));
+  // DOM video upload keeps the top row at texture v=0, matching this calibration.
+  vec2 uv = vec2(source.x / uSourceSize.x, source.y / uSourceSize.y);
+  outColor = texture(uFrame, uv);
+}
+`;
+
+function dewarpShader(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const error = gl.getShaderInfoLog(shader) || 'shader compilation failed';
+    gl.deleteShader(shader);
+    throw new Error(error);
+  }
+  return shader;
+}
+
+function createDewarpRenderer(video, canvas, circle = DEWARP_CIRCLE) {
+  try {
+    const gl = canvas.getContext('webgl2', {
+      alpha: false, antialias: false, depth: false, stencil: false,
+      preserveDrawingBuffer: false,
+    });
+    if (!gl) return null;
+
+    const program = gl.createProgram();
+    const vertex = dewarpShader(gl, gl.VERTEX_SHADER, DEWARP_VERTEX_SHADER);
+    const fragment = dewarpShader(gl, gl.FRAGMENT_SHADER, DEWARP_FRAGMENT_SHADER);
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    gl.deleteShader(vertex);
+    gl.deleteShader(fragment);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(program) || 'shader link failed');
+    }
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 1, -1, -1, 1,
+      -1, 1, 1, -1, 1, 1,
+    ]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'aPosition');
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+    const texture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+    gl.useProgram(program);
+    const outputSizeLoc = gl.getUniformLocation(program, 'uOutputSize');
+    const sourceSizeLoc = gl.getUniformLocation(program, 'uSourceSize');
+    const separatorLoc = gl.getUniformLocation(program, 'uSeparator');
+    gl.uniform1i(gl.getUniformLocation(program, 'uFrame'), 0);
+    gl.uniform3f(gl.getUniformLocation(program, 'uCircle'), ...circle);
+    gl.clearColor(0, 0, 0, 1);
+
+    let running = false;
+    let animationFrame = 0;
+    let resizeKey = '';
+    let sourceWidth = 0;
+    let sourceHeight = 0;
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const cssSize = Math.min(rect.width, rect.height);
+      if (cssSize < 2) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const key = `${Math.round(cssSize * 100)}:${dpr}`;
+      if (key === resizeKey) return;
+      resizeKey = key;
+      const width = Math.max(2, Math.min(2048, Math.round(cssSize * dpr)));
+      const separator = Math.max(1, Math.round(width / 512));
+      const height = width + separator;  // two 2:1 strips plus the separator
+      canvas.width = width;
+      canvas.height = height;
+      gl.viewport(0, 0, width, height);
+      gl.uniform2f(outputSizeLoc, width, height);
+      gl.uniform1f(separatorLoc, separator);
+    }
+
+    function draw() {
+      if (!running) return;
+      resize();
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        if (video.videoWidth !== sourceWidth || video.videoHeight !== sourceHeight) {
+          sourceWidth = video.videoWidth;
+          sourceHeight = video.videoHeight;
+          gl.uniform2f(sourceSizeLoc, sourceWidth, sourceHeight);
+        }
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+      animationFrame = requestAnimationFrame(draw);
+    }
+
+    function start() {
+      if (running) return;
+      running = true;
+      resize();
+      animationFrame = requestAnimationFrame(draw);
+    }
+
+    function stop() {
+      running = false;
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+    }
+
+    canvas.addEventListener('webglcontextlost', e => {
+      e.preventDefault();
+      stop();
+      // Keep the camera usable on a lost context rather than leaving a black tile.
+      canvas.style.display = 'none';
+      video.style.opacity = '1';
+    });
+    return { start, stop, resize };
+  } catch (err) {
+    console.warn('dewarp initialization failed:', err);
+    return null;
+  }
+}
+
 // ---------- UI ----------
 
 function makeTile(stream) {
@@ -459,6 +636,16 @@ function makeTile(stream) {
   video.muted = true;
   video.autoplay = true;
   video.playsInline = true;
+
+  let dewarp = null;
+  let dewarpCanvas = null;
+  if (stream.dewarp) {
+    dewarpCanvas = document.createElement('canvas');
+    dewarpCanvas.className = 'dewarp-canvas';
+    dewarpCanvas.setAttribute('aria-label', 'Dewarped 360 degree panorama');
+    dewarp = createDewarpRenderer(video, dewarpCanvas, stream.dewarp_circle || DEWARP_CIRCLE);
+    if (dewarp) tile.classList.add('dewarp');
+  }
 
   const label = document.createElement('div');
   label.className = 'label';
@@ -523,7 +710,10 @@ function makeTile(stream) {
   });
   bell.addEventListener('dblclick', e => e.stopPropagation());
 
-  tile.append(video, label, dot, status, mute, snap, bell);
+  tile.append(video);
+  if (dewarp) tile.append(dewarpCanvas);
+  tile.append(label, dot, status, mute, snap, bell);
+  if (stream.dewarp && !dewarp) toast(tile, 'WebGL2 unavailable — showing raw fisheye', true);
 
   // single click -> fullscreen, double click -> back to grid
   tile.addEventListener('click', () => {
@@ -535,7 +725,7 @@ function makeTile(stream) {
 
   grid.appendChild(tile);
   layout();
-  const ctl = { active: true, video, status, stop: null, wake: null };
+  const ctl = { active: true, video, status, dewarp, stop: null, wake: null };
   streamCtls.set(stream.name, ctl);
   runStream(stream.name, ctl);
 }

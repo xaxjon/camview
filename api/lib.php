@@ -8,6 +8,11 @@ const STREAMS_FILE = CAMVIEW_ROOT . '/streams.json';
 const USERS_FILE   = CAMVIEW_ROOT . '/users.json';
 const SNAPSHOTS_DIR = CAMVIEW_ROOT . '/snapshots';
 const MAX_SNAPSHOTS = 500;  // oldest are pruned beyond this
+const DEWARP_CACHE_DIR = SNAPSHOTS_DIR . '/.dewarp';
+const DEWARP_VERSION = 1;
+const DEWARP_CIRCLE = [0.519201, 0.499414, 0.494428];
+const DEWARP_FULL_WIDTH = 2048;
+const DEWARP_THUMB_WIDTH = 512;
 
 const NAME_RE = '/^[a-zA-Z0-9_-]+$/';
 const SNAPSHOT_RE = '/^[a-zA-Z0-9_-]+-\d{8}-\d{6}(-\d+)?\.jpg$/';
@@ -52,7 +57,10 @@ function prune_snapshots(): void {
     $files = glob(SNAPSHOTS_DIR . '/*.jpg') ?: [];
     if (count($files) <= MAX_SNAPSHOTS) return;
     usort($files, fn($a, $b) => filemtime($a) <=> filemtime($b));
-    foreach (array_slice($files, 0, count($files) - MAX_SNAPSHOTS) as $f) unlink($f);
+    foreach (array_slice($files, 0, count($files) - MAX_SNAPSHOTS) as $f) {
+        dewarp_forget($f);
+        unlink($f);
+    }
 }
 
 function list_snapshots(): array {
@@ -76,6 +84,114 @@ function valid_snapshot_file(string $f): string {
     $path = SNAPSHOTS_DIR . '/' . $f;
     if (!is_file($path)) json_err('not found', 404);
     return $path;
+}
+
+// ---------- on-demand dewarped stills ----------
+
+function camera_config(string $name): ?array {
+    foreach (load_cameras() as $c) {
+        if ($c['name'] === $name) return $c;
+    }
+    return null;
+}
+
+// Cache paths mirror the raw path below snapshots/.dewarp. This location is
+// writable by PHP even when motion JPEGs themselves were created by root.
+function dewarp_cache_base(string $raw): ?string {
+    $root = rtrim(CAMVIEW_ROOT, '/') . '/';
+    if (!str_starts_with($raw, $root) || !str_ends_with($raw, '.jpg')) return null;
+    $rel = substr($raw, strlen($root));
+    if (str_contains($rel, '..')) return null;
+    if (!str_starts_with($rel, 'snapshots/') && !str_starts_with($rel, 'motion/')) return null;
+    return DEWARP_CACHE_DIR . '/' . substr($rel, 0, -4);
+}
+
+function dewarp_cache_ready(): bool {
+    if (!is_dir(SNAPSHOTS_DIR) && !@mkdir(SNAPSHOTS_DIR, 0775, true)) return false;
+    if (!is_file(SNAPSHOTS_DIR . '/.htaccess')) {
+        @file_put_contents(SNAPSHOTS_DIR . '/.htaccess', "Require all denied\n");
+    }
+    if (!is_dir(DEWARP_CACHE_DIR) && !@mkdir(DEWARP_CACHE_DIR, 0775, true)) return false;
+    if (!is_file(DEWARP_CACHE_DIR . '/.htaccess')) {
+        @file_put_contents(DEWARP_CACHE_DIR . '/.htaccess', "Require all denied\n");
+    }
+    return is_writable(DEWARP_CACHE_DIR);
+}
+
+function dewarp_forget(string $raw): void {
+    $base = dewarp_cache_base($raw);
+    if ($base === null) return;
+    $lock = @fopen($base . '.lock', 'c');
+    if ($lock && !flock($lock, LOCK_EX)) {
+        fclose($lock);
+        $lock = null;
+    }
+    foreach (glob($base . '-*.jpg') ?: [] as $f) @unlink($f);
+    if ($lock) {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        @unlink($base . '.lock');
+    }
+    $dir = dirname($base);
+    while ($dir !== DEWARP_CACHE_DIR && str_starts_with($dir, DEWARP_CACHE_DIR . '/')) {
+        if (!@rmdir($dir)) break;
+        $dir = dirname($dir);
+    }
+}
+
+// Returns ['path' => served JPEG, 'dewarped' => whether it is a panorama].
+// Raw remains available as a fallback if an optional dependency or remap fails.
+function dewarped_capture(string $raw, array $cam, int $width): array {
+    $fallback = fn() => ['path' => $raw, 'dewarped' => false];
+    if (empty($cam['dewarp'])) return $fallback();
+    $base = dewarp_cache_base($raw);
+    if ($base === null || !dewarp_cache_ready()) return $fallback();
+    $stat = @stat($raw);
+    if (!$stat) return $fallback();
+    $info = @getimagesize($raw);
+    if (is_array($info) && isset($info[0])) $width = min($width, (int) $info[0]);
+    $width = max(2, $width);
+    $signature = substr(hash('sha256', json_encode([
+        DEWARP_VERSION, DEWARP_CIRCLE, $width, $stat['mtime'], $stat['size'],
+    ])), 0, 16);
+    $cache = "$base-$width-$signature.jpg";
+    $valid = fn() => is_file($cache) && filesize($cache) > 2;
+    if ($valid()) return ['path' => $cache, 'dewarped' => true];
+    if (!is_dir(dirname($cache)) && !@mkdir(dirname($cache), 0775, true)) return $fallback();
+
+    $lock = @fopen($base . '.lock', 'c');
+    if (!$lock || !flock($lock, LOCK_EX)) {
+        if ($lock) fclose($lock);
+        return $fallback();
+    }
+    try {
+        if ($valid()) return ['path' => $cache, 'dewarped' => true];
+        $cmd = 'timeout 30 ' . escapeshellarg(getenv('PYTHON') ?: 'python3')
+             . ' ' . escapeshellarg(CAMVIEW_ROOT . '/dewarp.py')
+             . ' ' . escapeshellarg($raw) . ' ' . escapeshellarg($cache)
+             . ' ' . (int) $width;
+        foreach (DEWARP_CIRCLE as $v) $cmd .= ' ' . escapeshellarg(sprintf('%.6F', $v));
+        $output = [];
+        exec($cmd . ' 2>&1', $output, $rc);
+        if ($rc !== 0 || !$valid()) {
+            @unlink($cache);
+            error_log('camview dewarp failed for ' . $raw . ': ' . trim(implode("\n", $output)));
+            return $fallback();
+        }
+        $prefix = basename($base) . "-$width-";
+        foreach (glob(dirname($cache) . '/' . $prefix . '*.jpg') ?: [] as $f) {
+            if ($f !== $cache) @unlink($f);
+        }
+        return ['path' => $cache, 'dewarped' => true];
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
+function capture_download_name(string $raw, bool $dewarped): string {
+    $name = basename($raw);
+    return $dewarped ? preg_replace('/\.jpg$/', '-pano.jpg', $name) : $name;
 }
 
 session_set_cookie_params([
@@ -177,6 +293,7 @@ function load_cameras(): array {
             'source' => $s['source'],
             'transcode_audio' => !empty($s['transcode_audio']),
             'transcode_video' => !empty($s['transcode_video']),
+            'dewarp' => !empty($s['dewarp']),
             'enabled' => ($s['enabled'] ?? true) !== false,
             'motion' => !empty($s['motion']),
             'motion_threshold' => isset($s['motion_threshold']) ? (float) $s['motion_threshold'] : null,
@@ -193,6 +310,7 @@ function save_cameras(array $cams): void {
         $e = ['name' => $c['name'], 'source' => $c['source']];
         if (!empty($c['transcode_audio'])) $e['transcode_audio'] = true;
         if (!empty($c['transcode_video'])) $e['transcode_video'] = true;
+        if (!empty($c['dewarp'])) $e['dewarp'] = true;
         if (isset($c['enabled']) && !$c['enabled']) $e['enabled'] = false;
         if (!empty($c['motion'])) $e['motion'] = true;
         if (!empty($c['motion_threshold'])) $e['motion_threshold'] = (float) $c['motion_threshold'];

@@ -16,6 +16,8 @@ if ($method === 'GET') {
             'name' => $c['name'],
             'enabled' => $c['enabled'],
             'motion' => $c['motion'],  // viewer needs it for the alarm bell
+            'dewarp' => $c['dewarp'],  // viewer selects the fisheye renderer
+            'dewarp_circle' => $c['dewarp'] ? DEWARP_CIRCLE : null,
             'status' => $c['enabled'] ? ($status[$c['name']] ?? 'standby') : 'disabled',
         ];
         if ($isAdmin) {
@@ -52,6 +54,7 @@ function validated_camera(array $b): array {
         'source' => $source,
         'transcode_audio' => !empty($b['transcode_audio']),
         'transcode_video' => !empty($b['transcode_video']),
+        'dewarp' => !empty($b['dewarp']),
         'enabled' => ($b['enabled'] ?? true) !== false,
         'motion' => !empty($b['motion']),
         'motion_threshold' => isset($b['motion_threshold']) && $b['motion_threshold'] !== ''

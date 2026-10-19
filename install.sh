@@ -39,6 +39,8 @@ echo "== camview install in $DIR (user: $REAL_USER, web: $WEB_USER)"
 
 missing=()
 command -v python3 > /dev/null || missing+=(python3)
+python3 -c 'import numpy' > /dev/null 2>&1 || missing+=(python3-numpy)
+python3 -c 'from PIL import Image' > /dev/null 2>&1 || missing+=(python3-pil)
 command -v curl    > /dev/null || missing+=(curl)
 command -v tar     > /dev/null || missing+=(tar)
 command -v php     > /dev/null || missing+=(php-cli)

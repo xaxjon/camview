@@ -59,6 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach (glob($dayDir . '/*.jpg') ?: [] as $f) {
                 $bytes += filesize($f);
                 $files++;
+                dewarp_forget($f);
                 unlink($f);
             }
             @rmdir($dayDir);
@@ -69,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (filemtime($f) < time() - 86400) {
             $bytes += filesize($f);
             $files++;
+            dewarp_forget($f);
             unlink($f);
         }
     }

@@ -117,6 +117,7 @@ async def main():
           document.getElementById('f-name').value = 'testcam';
           document.getElementById('f-source').value = 'rtsp://127.0.0.1:18554/test';
           document.getElementById('f-transcode').checked = true;
+          document.getElementById('f-dewarp').checked = true;
           document.getElementById('f-motion').checked = true;
         """)
         await js("document.getElementById('test').click()")
@@ -134,10 +135,13 @@ async def main():
             == ["front-door", "driveway", "testcam"])
         check("motion badge in table", await js(
             "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).textContent.includes('motion')"))
+        check("360 badge in table", await js(
+            "[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).textContent.includes('360°')"))
 
         print("== motion sensitivity slider ==")
         await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=edit]').click()")
         await asyncio.sleep(0.5)
+        check("dewarp checkbox round-trips", await js("document.getElementById('f-dewarp').checked") is True)
         check("slider visible when motion enabled", await js("document.getElementById('motion-sens-row').style.display") == "block")
         check("slider defaults to 5", await js("document.getElementById('f-sens').value") == "5")
         await js("document.getElementById('f-sens').value = '7'; document.getElementById('f-sens').dispatchEvent(new Event('input'))")
@@ -469,6 +473,15 @@ async def main():
             if tiles3 == 3:
                 break
         check("viewer shows all tiles after re-enable", tiles3 == 3, tiles3)
+        dewarp_view = await js("""(function(){
+          const t = document.querySelector('.tile[data-name=testcam]');
+          const gl = document.createElement('canvas').getContext('webgl2');
+          return {webgl: !!gl, canvas: !!(t && t.querySelector('.dewarp-canvas')),
+                  video: !!(t && t.querySelector('video'))};
+        })()""")
+        check("dewarp camera uses canvas or raw fallback",
+              isinstance(dewarp_view, dict) and dewarp_view["video"] and
+              (not dewarp_view["webgl"] or dewarp_view["canvas"]), dewarp_view)
         await js("[...document.querySelectorAll('.tile')].find(t => t.dataset.name === 'testcam').querySelector('.snap').click()")
         toast = None
         for _ in range(20):

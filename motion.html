@@ -188,7 +188,7 @@ function draw() {
     const camFiles = data.files[cam] || [];
     const thumbImg = row.querySelector('.camthumb');
     if (camFiles.length) {
-      thumbImg.src = 'api/motion.php?file=' + encodeURIComponent(camFiles[camFiles.length - 1][1]);
+      thumbImg.src = 'api/motion.php?file=' + encodeURIComponent(camFiles[camFiles.length - 1][1]) + '&thumb=1';
       thumbImg.title = 'latest motion frame';
     } else {
       thumbImg.style.visibility = 'hidden';
@@ -286,7 +286,10 @@ function onHover(ev) {
   if (!b) { hideThumb(); return; }
   const img = thumb.querySelector('img');
   const rel = b.files[0];
-  if (!img.src.endsWith(rel)) img.src = 'api/motion.php?file=' + encodeURIComponent(rel);
+  if (img.dataset.rel !== rel) {
+    img.dataset.rel = rel;
+    img.src = 'api/motion.php?file=' + encodeURIComponent(rel) + '&thumb=1';
+  }
   thumb.querySelector('.cap').textContent =
     `${ev.currentTarget.dataset.cam} · ${b.count} frame${b.count > 1 ? 's' : ''}`;
   thumb.style.display = 'block';

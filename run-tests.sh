@@ -4,8 +4,8 @@
 # cameras (AAC testsrc, moving mandelbrot, static color), and the app served
 # by PHP's built-in web server.
 #
-# Usage: ./run-tests.sh     (requires: python3 + websockets, google-chrome,
-#                          php, and bin/ binaries via ./setup.sh)
+# Usage: ./run-tests.sh     (requires: python3 + websockets + numpy + Pillow,
+#                          google-chrome, php, and bin/ binaries via ./setup.sh)
 set -u
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
@@ -19,11 +19,12 @@ trap cleanup EXIT
 # --- scratch app copy (binaries symlinked) ---
 rm -rf "$WORK" "$MWORK"
 mkdir -p "$WORK"
-cp -r api *.html gen-config.py transcode.py sanitize.py motion.py streams.json.example "$WORK/"
+cp -r api *.html gen-config.py transcode.py sanitize.py motion.py dewarp.py streams.json.example "$WORK/"
 ln -s "$ROOT/bin" "$WORK/bin"
 cp streams.json.example "$WORK/streams.json"
 # the viewer hardcodes WHEP port 8889; the test MediaMTX uses 28889
 sed -i 's/location\.hostname}:8889/location.hostname}:28889/' "$WORK/index.html"
+python3 test_dewarp.py || exit 1
 
 # --- scratch MediaMTX instances ---
 cat > /tmp/mtx-test-camera.yml << 'EOF'   # hosts the fake cameras (publisher mode)
@@ -263,22 +264,29 @@ echo "capture size setting: ok ($FULL_DIMS -> $LOW_DIMS)"
 python3 - << 'EOF'
 import importlib.util, os, pathlib, shutil
 os.environ["MOTION_DIR"] = "/tmp/prune-test"
+cache = pathlib.Path("/tmp/prune-test-cache")
 shutil.rmtree("/tmp/prune-test", ignore_errors=True)
+shutil.rmtree(cache, ignore_errors=True)
 for cam in ("a", "b"):
     for day in ("2026-09-30", "2026-10-01", "2026-10-02"):
         d = pathlib.Path(f"/tmp/prune-test/{cam}/{day}")
         d.mkdir(parents=True)
-        (d / "x.jpg").write_bytes(b"\xff\xd8" + b"\0" * 40000)  # 40KB per day-dir
+        (d / "x.jpg").write_bytes(b"\xff\xd8" + b"\0" * 40000)  # 40KB raw
+        c = cache / "motion" / cam / day
+        c.mkdir(parents=True)
+        (c / "x-pano.jpg").write_bytes(b"\xff\xd8" + b"\0" * 40000)  # 40KB cache
 spec = importlib.util.spec_from_file_location("m", "/tmp/camview-motion-test/motion.py")
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-m.SETTINGS = pathlib.Path("/tmp/prune-test-settings.json")
-# long retention (age-prune inert), cap ~84KB -> keeps only the newest day
-m.SETTINGS.write_text('{"retention_days": 365, "max_storage_gb": 0.00008}')
+m.DEWARP_CACHE = cache
+# long retention (age-prune inert), cap ~168KB -> keeps only the newest day
+m.get_settings = lambda: (True, 365, 0.00016)
 m.prune()
 left = sorted(p.parent.name for p in pathlib.Path("/tmp/prune-test").rglob("*.jpg"))
 assert left == ["2026-10-02", "2026-10-02"], left
-print("prune storage cap: ok")
+cache_left = sorted(p.parent.name for p in cache.rglob("*.jpg"))
+assert cache_left == ["2026-10-02", "2026-10-02"], cache_left
+print("prune storage cap (raw + dewarp cache): ok")
 EOF
 
 # --- RTSP -timeout: ffmpeg must error out of a silent socket on its own ---

@@ -30,9 +30,9 @@ timestamp and deletes the trigger (checked roughly once a second).
 Global settings come from settings.json (edited on the System page):
     "capture_fullres": true   full-resolution captures (default) vs 480p
     "retention_days": 7       timeline retention (pruned hourly)
-    "max_storage_gb": 10      hard cap for motion/ — oldest day-dirs are
-                              pruned when exceeded (a storm week at full res
-                              cannot fill the disk)
+    "max_storage_gb": 10      hard cap for motion/ and its dewarp cache —
+                              oldest day-dirs are pruned when exceeded (a storm
+                              week at full res cannot fill the disk)
 
 Self-healing: ffmpeg gets the RTSP -timeout option so a dead socket makes it
 exit on its own, and the supervisor watches each child's *decoded-frame*
@@ -53,7 +53,7 @@ substream itself (MediaMTX does not restream it).
 
 Env overrides (used by tests): MOTION_DIR, MOTION_RETENTION_DAYS,
 MOTION_FULLRES, MOTION_POLL_INTERVAL, MOTION_STALL_TIMEOUT, MOTION_TIMEOUT_US,
-MOTION_RTSP_BASE.
+MOTION_RTSP_BASE, DEWARP_CACHE_DIR.
 """
 import json
 import os
@@ -71,6 +71,7 @@ FFMPEG = ROOT / "bin" / "ffmpeg"
 STREAMS = ROOT / "streams.json"
 SETTINGS = ROOT / "settings.json"
 MOTION_DIR = Path(os.environ.get("MOTION_DIR", ROOT / "motion"))
+DEWARP_CACHE = Path(os.environ.get("DEWARP_CACHE_DIR", ROOT / "snapshots" / ".dewarp"))
 DEFAULT_THRESHOLD = 0.05
 ENV_RETENTION = os.environ.get("MOTION_RETENTION_DAYS")   # settings.json otherwise
 ENV_FULLRES = os.environ.get("MOTION_FULLRES")            # settings.json otherwise
@@ -397,6 +398,21 @@ def drain(timeout):
                 sys.stderr.buffer.flush()
 
 
+def dewarp_day_dir(day_dir):
+    return DEWARP_CACHE / "motion" / day_dir.parent.name / day_dir.name
+
+
+def day_size(day_dir):
+    raw = sum(f.stat().st_size for f in day_dir.rglob("*.jpg"))
+    cache = sum(f.stat().st_size for f in dewarp_day_dir(day_dir).rglob("*.jpg"))
+    return raw + cache
+
+
+def remove_day(day_dir):
+    shutil.rmtree(day_dir, ignore_errors=True)
+    shutil.rmtree(dewarp_day_dir(day_dir), ignore_errors=True)
+
+
 def prune():
     _, retention, max_gb = get_settings()
     cutoff = date.today() - timedelta(days=retention)
@@ -408,12 +424,12 @@ def prune():
                 continue
             try:
                 if date.fromisoformat(day_dir.name) < cutoff:
-                    shutil.rmtree(day_dir, ignore_errors=True)
+                    remove_day(day_dir)
                     log(f"pruned {day_dir}")
             except ValueError:
                 continue
     # hard storage cap: drop the oldest day-dirs (any camera) until the
-    # motion tree fits — a storm week at full res must never fill the disk
+    # motion tree and its dewarp cache fit — a storm week cannot fill the disk
     cap = int(max_gb * (1 << 30))
     day_dirs = []
     total = 0
@@ -427,29 +443,16 @@ def prune():
                 date.fromisoformat(day_dir.name)
             except ValueError:
                 continue
-            size = sum(f.stat().st_size for f in day_dir.rglob("*.jpg"))
-            day_dirs.append((day_dir.name, day_dir))
+            size = day_size(day_dir)
+            day_dirs.append((day_dir.name, day_dir, size))
             total += size
-    day_dirs.sort()  # oldest date first
-    for day, path in day_dirs:
+    day_dirs.sort(key=lambda item: item[0])  # oldest date first
+    for day, path, size in day_dirs:
         if total <= cap:
             break
-        size = sum(f.stat().st_size for f in path.rglob("*.jpg"))
-        shutil.rmtree(path, ignore_errors=True)
+        remove_day(path)
         total -= size
-        log(f"pruned {path} (storage cap {max_gb}GB)")
-    for cam_dir in MOTION_DIR.iterdir() if MOTION_DIR.is_dir() else []:
-        if not cam_dir.is_dir():
-            continue
-        for day_dir in cam_dir.iterdir():
-            if not day_dir.is_dir():
-                continue
-            try:
-                if date.fromisoformat(day_dir.name) < cutoff:
-                    shutil.rmtree(day_dir, ignore_errors=True)
-                    log(f"pruned {day_dir}")
-            except ValueError:
-                continue
+        log(f"pruned {path} (storage cap {max_gb}GB, including dewarp cache)")
 
 
 def on_signal(*_):

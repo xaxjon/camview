@@ -7,11 +7,25 @@ $u = require_login();
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET' && isset($_GET['file'])) {
-    $path = valid_snapshot_file((string) $_GET['file']);
+    $file = (string) $_GET['file'];
+    $raw = valid_snapshot_file($file);
+    $path = $raw;
+    $dewarped = false;
+    if (empty($_GET['raw'])) {
+        $camName = preg_replace('/-\d{8}-\d{6}(-\d+)?\.jpg$/', '', $file);
+        $cam = camera_config($camName);
+        if ($cam) {
+            $out = dewarped_capture($raw, $cam,
+                !empty($_GET['thumb']) ? DEWARP_THUMB_WIDTH : DEWARP_FULL_WIDTH);
+            $path = $out['path'];
+            $dewarped = $out['dewarped'];
+        }
+    }
     header('Content-Type: image/jpeg');
     header('Content-Length: ' . filesize($path));
+    header('X-Camview-Dewarp: ' . ($dewarped ? 'panorama' : 'raw'));
     if (!empty($_GET['download'])) {
-        header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+        header('Content-Disposition: attachment; filename="' . capture_download_name($raw, $dewarped) . '"');
     }
     readfile($path);
     exit;
@@ -26,15 +40,43 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST' && ($_GET['action'] ?? '') === 'archive') {
-    // bulk download as tar.gz (built with system tar; names are whitelist-validated)
-    $files = body()['files'] ?? [];
+    $b = body();
+    $files = $b['files'] ?? [];
+    $rawMode = !empty($b['raw']);
     if (!is_array($files) || !$files) json_err('no files selected');
-    $names = [];
-    foreach ($files as $f) { valid_snapshot_file((string) $f); $names[] = escapeshellarg((string) $f); }
-    $cmd = 'cd ' . escapeshellarg(SNAPSHOTS_DIR) . ' && tar czf - ' . implode(' ', $names);
+
+    // Stage validated symlinks so tar sees friendly panorama filenames while
+    // dereferencing them into actual JPEG data.
+    $stage = sys_get_temp_dir() . '/camview-archive-' . bin2hex(random_bytes(8));
+    if (!mkdir($stage, 0700, true)) json_err('cannot prepare archive', 500);
+    $cleanup = function () use ($stage) {
+        foreach (glob($stage . '/*') ?: [] as $f) @unlink($f);
+        @rmdir($stage);
+    };
+    register_shutdown_function($cleanup);
+    $seen = [];
+    foreach ($files as $f) {
+        $file = (string) $f;
+        $raw = valid_snapshot_file($file);
+        $out = ['path' => $raw, 'dewarped' => false];
+        if (!$rawMode) {
+            $camName = preg_replace('/-\d{8}-\d{6}(-\d+)?\.jpg$/', '', $file);
+            $cam = camera_config($camName);
+            if ($cam) $out = dewarped_capture($raw, $cam, DEWARP_FULL_WIDTH);
+        }
+        $name = capture_download_name($raw, $out['dewarped']);
+        if (isset($seen[$name])) continue;
+        $seen[$name] = true;
+        if (!symlink($out['path'], $stage . '/' . $name)) {
+            $cleanup();
+            json_err('cannot prepare archive', 500);
+        }
+    }
+    $cmd = 'tar czhf - -C ' . escapeshellarg($stage) . ' .';
     header('Content-Type: application/gzip');
     header('Content-Disposition: attachment; filename="snapshots.tar.gz"');
     passthru($cmd);
+    $cleanup();
     exit;
 }
 
@@ -44,13 +86,22 @@ if ($method === 'DELETE') {
     $b = body();
     if (!empty($b['all'])) {  // purge everything
         $n = 0;
-        foreach (glob(SNAPSHOTS_DIR . '/*.jpg') ?: [] as $f) { unlink($f); $n++; }
+        foreach (glob(SNAPSHOTS_DIR . '/*.jpg') ?: [] as $f) {
+            dewarp_forget($f);
+            unlink($f);
+            $n++;
+        }
         json_out(['ok' => true, 'deleted' => $n]);
     }
     $files = $b['files'] ?? [];
     if (!is_array($files) || !$files) json_err('no files selected');
     $n = 0;
-    foreach ($files as $f) { unlink(valid_snapshot_file((string) $f)); $n++; }
+    foreach ($files as $f) {
+        $path = valid_snapshot_file((string) $f);
+        dewarp_forget($path);
+        unlink($path);
+        $n++;
+    }
     json_out(['ok' => true, 'deleted' => $n]);
 }
 

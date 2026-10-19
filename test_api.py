@@ -3,12 +3,16 @@
 import json
 import os
 import datetime
+import io
 import pathlib
 import re
+import tarfile
 import time
 import urllib.request
 import urllib.parse
 import http.cookiejar
+
+from PIL import Image
 
 BASE = f"http://127.0.0.1:{os.environ.get('CAMVIEW_TEST_PORT', '8099')}/api"
 MTX = "http://127.0.0.1:29997"
@@ -22,6 +26,10 @@ def check(name, cond, extra=""):
     global passed, failed
     if cond: passed += 1; print(f"  ok   {name}")
     else: failed += 1; print(f"  FAIL {name} {extra}")
+
+def jpeg_size(data):
+    with Image.open(io.BytesIO(data)) as im:
+        return im.size
 
 def api(path, method="GET", data=None, csrf=None, raw=False):
     req = urllib.request.Request(f"{BASE}/{path}", method=method)
@@ -61,7 +69,8 @@ csrf = j.get("csrf")
 check("csrf token issued", bool(csrf))
 
 print("== camera CRUD + live apply ==")
-cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True, "motion": True}
+cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True,
+       "dewarp": True, "motion": True}
 s, j = api("cameras.php", "POST", cam); check("add without CSRF rejected", s == 403)
 s, j = api("cameras.php", "POST", cam, csrf)
 check("add camera", s == 200, j)
@@ -86,11 +95,13 @@ api("cameras.php", "DELETE", {"name": "driftcam"}, csrf)
 s, j = api("cameras.php")
 row = next((c for c in j if c["name"] == "testcam"), {})
 check("admin sees source + status", row.get("source", "").startswith("rtsp://") and "status" in row, row)
+check("admin sees dewarp flag", row.get("dewarp") is True, row)
 
 print("== motion timeline API ==")
 sj = json.loads(pathlib.Path("/tmp/camview-test/streams.json").read_text())
 entry = next(e for e in sj if isinstance(e, dict) and e.get("name") == "testcam")
 check("motion flag persisted in streams.json", entry.get("motion") is True, entry)
+check("dewarp flag persisted in streams.json", entry.get("dewarp") is True, entry)
 s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "motion_threshold": 0.03}, csrf)
 check("set motion threshold", s == 200, j)
 sj = json.loads(pathlib.Path("/tmp/camview-test/streams.json").read_text())
@@ -119,8 +130,20 @@ mfiles = j.get("files", {}).get("testcam", [])
 check("seeded motion files returned", len(mfiles) == 3, mfiles)
 if mfiles:
     rel = mfiles[0][1]
-    s, data = api(f"motion.php?file={urllib.parse.quote(rel)}", raw=True)
-    check("motion jpeg served", s == 200 and data[:2] == b"\xff\xd8", s)
+    quoted = urllib.parse.quote(rel)
+    s, data = api(f"motion.php?file={quoted}", raw=True)
+    check("motion panorama served", s == 200 and jpeg_size(data) == (320, 321),
+          (s, jpeg_size(data) if data[:2] == b"\xff\xd8" else len(data)))
+    s, raw_motion = api(f"motion.php?file={quoted}&raw=1", raw=True)
+    check("raw motion master available", s == 200 and jpeg_size(raw_motion) == (320, 240), s)
+    s, thumb_motion = api(f"motion.php?file={quoted}&thumb=1", raw=True)
+    check("motion thumbnail dewarped", s == 200 and jpeg_size(thumb_motion) == (320, 321), s)
+    cache_dir = pathlib.Path("/tmp/camview-test/snapshots/.dewarp/motion") / pathlib.Path(rel).parent
+    cache_files = list(cache_dir.glob(pathlib.Path(rel).stem + "-*.jpg"))
+    check("motion panorama cached", len(cache_files) >= 1, cache_dir)
+    stamps = [(p, p.stat().st_mtime_ns) for p in cache_files]
+    s, _ = api(f"motion.php?file={quoted}&thumb=1", raw=True)
+    check("motion cache reused", stamps == [(p, p.stat().st_mtime_ns) for p in cache_files], stamps)
 s, j = api("motion.php?file=..%2f..%2fstreams.json")
 check("motion path traversal rejected", s in (400, 404), s)
 s, j = api("motion.php?latest=1")
@@ -169,13 +192,33 @@ s, j = api("snapshots.php")
 row = next((f for f in j.get("files", []) if f["file"] == snap1), None)
 check("snapshot listed with cam name", row and row["cam"] == "testcam" and row["size"] > 1000, j)
 s, data = api(f"snapshots.php?file={snap1}", raw=True)
-check("serve snapshot JPEG", s == 200 and data[:2] == b"\xff\xd8", s)
+check("serve snapshot panorama", s == 200 and jpeg_size(data) == (1280, 1283), s)
+s, raw_snap = api(f"snapshots.php?file={snap1}&raw=1", raw=True)
+check("raw snapshot master available", s == 200 and jpeg_size(raw_snap) == (1280, 720), s)
+s, thumb_snap = api(f"snapshots.php?file={snap1}&thumb=1", raw=True)
+check("snapshot thumbnail dewarped", s == 200 and jpeg_size(thumb_snap) == (512, 513), s)
+cache_dir = pathlib.Path("/tmp/camview-test/snapshots/.dewarp/snapshots")
+cache_files = list(cache_dir.glob(pathlib.Path(snap1).stem + "-*.jpg"))
+check("snapshot panoramas cached", len(cache_files) >= 2, cache_files)
+stamps = [(p, p.stat().st_mtime_ns) for p in cache_files]
+s, _ = api(f"snapshots.php?file={snap1}&thumb=1", raw=True)
+check("snapshot cache reused", stamps == [(p, p.stat().st_mtime_ns) for p in cache_files], stamps)
 s, j = api("snapshots.php?file=..%2fstreams.json")
 check("path traversal rejected", s in (400, 404), s)
 s, data = api("snapshots.php?action=archive", "POST", {"files": [snap1]}, csrf, raw=True)
-check("archive is gzip", s == 200 and data[:2] == b"\x1f\x8b", (s, data[:10]))
+archive_ok = s == 200 and data[:2] == b"\x1f\x8b"
+check("archive is gzip", archive_ok, (s, data[:10]))
+if archive_ok:
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        member = next((m for m in archive.getmembers()
+                       if m.name.endswith(pathlib.Path(snap1).stem + "-pano.jpg")), None)
+        check("archive uses panorama filename", member is not None, archive.getnames())
+        if member:
+            archived = archive.extractfile(member).read()
+            check("archive contains panorama JPEG", jpeg_size(archived) == (1280, 1283), member.name)
 s, j = api("snapshots.php", "DELETE", {"files": [snap1]}, csrf)
 check("bulk delete", s == 200 and j.get("deleted") == 1, j)
+check("delete removes snapshot cache", all(not p.exists() for p in cache_files), cache_files)
 s, j = api("snapshot.php", "POST", {"name": "testcam"}, csrf)
 api("snapshot.php", "POST", {"name": "testcam"}, csrf)
 s, j = api("snapshots.php", "DELETE", {"all": True}, csrf)
@@ -204,6 +247,8 @@ check("viewer login", s == 200 and j["role"] == "viewer")
 vcsrf = j.get("csrf")
 s, j = api("cameras.php")
 check("viewer sees cameras without source", s == 200 and j and "source" not in j[0], j)
+row = next((c for c in j if c["name"] == "testcam"), {})
+check("viewer gets dewarp flag without source", row.get("dewarp") is True and "source" not in row, row)
 s, j = api("cameras.php", "POST", {"name": "x", "source": "rtsp://x"}, vcsrf)
 check("viewer cannot add camera (403)", s == 403)
 s, j = api("users.php")

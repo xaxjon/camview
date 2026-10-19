@@ -34,13 +34,25 @@ if (isset($_GET['latest'])) {
 
 if (isset($_GET['file'])) {
     $rel = (string) $_GET['file'];
-    if (!preg_match(MOTION_FILE_RE, $rel)) json_err('invalid file', 400);
-    $path = MOTION_DIR . '/' . $rel;
-    if (!is_file($path)) json_err('not found', 404);
+    if (!preg_match(MOTION_FILE_RE, $rel, $m)) json_err('invalid file', 400);
+    $raw = MOTION_DIR . '/' . $rel;
+    if (!is_file($raw)) json_err('not found', 404);
+    $path = $raw;
+    $dewarped = false;
+    if (empty($_GET['raw'])) {
+        $cam = camera_config($m[1]);
+        if ($cam) {
+            $out = dewarped_capture($raw, $cam,
+                !empty($_GET['thumb']) ? DEWARP_THUMB_WIDTH : DEWARP_FULL_WIDTH);
+            $path = $out['path'];
+            $dewarped = $out['dewarped'];
+        }
+    }
     header('Content-Type: image/jpeg');
     header('Content-Length: ' . filesize($path));
+    header('X-Camview-Dewarp: ' . ($dewarped ? 'panorama' : 'raw'));
     if (!empty($_GET['download'])) {
-        header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+        header('Content-Disposition: attachment; filename="' . capture_download_name($raw, $dewarped) . '"');
     }
     readfile($path);
     exit;

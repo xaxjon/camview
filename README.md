@@ -16,6 +16,11 @@ user management and a camera config UI. No build step, no framework.
   **live connection test** (probes the RTSP URL, reports video/audio
   codecs, and warns when audio needs transcoding). Changes apply to the
   running MediaMTX instantly — no service restart.
+- **UniFi 360 dewarping**: tick **UniFi 360 camera** for a circular-fisheye
+  RTSP source. The viewer uses WebGL2 to render two upright 180° panorama
+  strips in the browser; no server-side re-encode is added. The G6 Pro 360
+  `s1` stream is the recommended starting point. Browsers without WebGL2
+  fall back to the original fisheye view.
 - **User management** (`users.html`): create users, set roles, reset
   passwords; protects the last admin.
 - **Live status dots** per camera (streaming / standby / disabled).
@@ -46,7 +51,8 @@ user management and a camera config UI. No build step, no framework.
 - Linux x86_64 or aarch64 (the commands below are Debian/Ubuntu)
 - **Apache + mod_php** (`apache2 libapache2-mod-php php-curl`) — the app is
   plain PHP pages + a JSON API; php-cli alone is not enough
-- **python3** (generates the MediaMTX config and runs the wrappers)
+- **python3 + NumPy + Pillow** (`python3 python3-numpy python3-pil`) — generates
+  the MediaMTX config, runs the wrappers, and dewarps stored still images
 - MediaMTX + ffmpeg binaries: downloaded by the installer (`setup.sh`)
 
 ## Deploy (fresh Ubuntu/Debian server)
@@ -57,7 +63,7 @@ The app belongs in the web tree, not your home directory:
 # 1. packages (skip this if you like — the installer offers to apt-install
 #    whatever is missing, Apache included)
 sudo apt update
-sudo apt install -y git curl tar python3 apache2 libapache2-mod-php php-curl
+sudo apt install -y git curl tar python3 python3-numpy python3-pil apache2 libapache2-mod-php php-curl
 
 # 2. code — you own the tree (git pull works), web server is the group
 sudo git clone https://github.com/xaxjon/camview.git /var/www/html/camview
@@ -168,6 +174,18 @@ ones. Detection therefore survives network blips and camera hangs without a
 reboot; both knobs are env overrides (`MOTION_TIMEOUT_US`,
 `MOTION_STALL_TIMEOUT`) in the systemd unit if needed.
 
+## Stored 360° images
+
+For cameras with **UniFi 360 camera** enabled, raw snapshot and motion JPEGs
+remain untouched masters. Image views and downloads return a dual panorama,
+generated on the first request and then served from `snapshots/.dewarp/`
+(which is protected like the other capture files). Thumbnail URLs use
+`thumb=1`; append `raw=1` to a snapshot or motion image URL for the original.
+Snapshot archives contain `*-pano.jpg` by default. The first remap uses CPU
+(NumPy + Pillow); cache hits are plain file reads. Derivatives are deleted
+with their masters and included in the motion storage cap. Motion detection
+and motion zones always stay on the raw stream.
+
 ## Sound
 
 WebRTC audio only supports **Opus** and **G.711 (PCMU/PCMA)**. The
@@ -249,12 +267,13 @@ entries in the array act as comments.
 spins up a scratch environment (two MediaMTX instances on alternate ports,
 a fake AAC test camera, the app under `php -S`) and runs:
 
+- `test_dewarp.py` — synthetic still-image mapping, orientation and raw-master checks.
 - `test_api.py` — 30 API checks: setup, login, CSRF, validation, CRUD with
   live MediaMTX apply, probe/snapshot, roles.
 - `test_ui.py` — 13 headless-Chrome checks: first-run flow, login, grid,
   admin add-camera with live test, disable toggle, logout gating.
 
-Requires `google-chrome` and the Python `websockets` package.
+Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packages.
 
 ## Files
 
@@ -279,4 +298,5 @@ Requires `google-chrome` and the Python `websockets` package.
 - `mediamtx-viewer.service` — systemd unit template (`__DIR__` filled by
   install.sh)
 - `gen-config.py`, `transcode.py` — config generator + transcode watchdog
-- `run-tests.sh`, `test_api.py`, `test_ui.py` — test suite
+- `dewarp.py` — cached still-image dual-panorama remapper
+- `run-tests.sh`, `test_dewarp.py`, `test_api.py`, `test_ui.py` — test suite

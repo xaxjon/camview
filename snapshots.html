@@ -123,9 +123,10 @@ async function refresh() {
     const card = document.createElement('div');
     card.className = 'card';
     const url = `api/snapshots.php?file=${encodeURIComponent(f.file)}`;
+    const thumbUrl = `${url}&thumb=1`;
     card.innerHTML = `
       <input type="checkbox">
-      <img loading="lazy" src="${url}" alt="">
+      <img loading="lazy" src="${thumbUrl}" alt="">
       <div class="meta"><b></b><span></span></div>`;
     card.querySelector('b').textContent = f.cam;
     card.querySelector('.meta span').textContent =
