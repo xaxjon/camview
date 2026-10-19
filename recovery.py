@@ -319,7 +319,9 @@ def check_once(now=None):
 
 
 def main():
+    global FAILURES_NEEDED
     if "--once" in sys.argv:
+        FAILURES_NEEDED = 1  # manual recovery should act on the first failed check
         return 0 if check_once() else 1
     log(f"watching {STREAMS} every {POLL_SECONDS:.0f}s")
     while True:
