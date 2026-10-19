@@ -1,0 +1,15 @@
+[Unit]
+Description=Camview UniFi 360 RTSP recovery supervisor
+After=network-online.target mediamtx-viewer.service
+Wants=network-online.target
+
+[Service]
+# __DIR__ is replaced by install.sh with the actual install directory.
+# Optional credentials: /etc/camview/recovery.env (mode 0600, outside the web tree).
+EnvironmentFile=-/etc/camview/recovery.env
+ExecStart=/usr/bin/env python3 __DIR__/recovery.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

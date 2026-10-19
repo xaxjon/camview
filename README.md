@@ -53,6 +53,7 @@ user management and a camera config UI. No build step, no framework.
   plain PHP pages + a JSON API; php-cli alone is not enough
 - **python3 + NumPy + Pillow** (`python3 python3-numpy python3-pil`) — generates
   the MediaMTX config, runs the wrappers, and dewarps stored still images
+- **OpenSSH client + sshpass** (`openssh-client sshpass`) — UniFi 360 recovery
 - MediaMTX + ffmpeg binaries: downloaded by the installer (`setup.sh`)
 
 ## Deploy (fresh Ubuntu/Debian server)
@@ -63,7 +64,7 @@ The app belongs in the web tree, not your home directory:
 # 1. packages (skip this if you like — the installer offers to apt-install
 #    whatever is missing, Apache included)
 sudo apt update
-sudo apt install -y git curl tar python3 python3-numpy python3-pil apache2 libapache2-mod-php php-curl
+sudo apt install -y git curl tar python3 python3-numpy python3-pil openssh-client sshpass apache2 libapache2-mod-php php-curl
 
 # 2. code — you own the tree (git pull works), web server is the group
 sudo git clone https://github.com/xaxjon/camview.git /var/www/html/camview
@@ -186,6 +187,55 @@ Snapshot archives contain `*-pano.jpg` by default. The first remap uses CPU
 with their masters and included in the motion storage cap. Motion detection
 and motion zones always stay on the raw stream.
 
+## UniFi 360 reboot recovery
+
+The standalone RTSP setup is firmware runtime state and can disappear after a
+camera reboot. `camview-recovery.service` watches every enabled camera marked
+**UniFi 360 camera** (`"dewarp": true`). After repeated RTSP failures it uses
+SSH to restore standalone ingestion, recreate the RTSP listener, wait for
+`s0`/`s1`/`s2`, disable the broken local authentication database, and verify
+RTSP again. Healthy cameras are not restarted.
+
+Configure SSH credentials once in `/etc/camview/recovery.env` (mode `0600`,
+outside the web tree). Key auth is preferred:
+
+```sh
+sudo ssh-keygen -t ed25519 -f /root/.ssh/camview_unifi360 -N ''
+sudo ssh-copy-id -i /root/.ssh/camview_unifi360.pub ubnt@CAMERA_IP
+sudo nano /etc/camview/recovery.env
+sudo systemctl restart camview-recovery
+```
+
+Example:
+
+```sh
+UNIFI360_SSH_USER=ubnt
+UNIFI360_SSH_KEY=/root/.ssh/camview_unifi360
+```
+
+Password fallback (do not put this file in the repository or web tree):
+
+```sh
+sudo install -m 600 /dev/null /etc/camview/unifi360-password
+sudoedit /etc/camview/unifi360-password
+```
+
+Then set:
+
+```sh
+UNIFI360_SSH_PASSWORD_FILE=/etc/camview/unifi360-password
+```
+
+Useful commands:
+
+```sh
+sudo ./recovery.py --once                    # check/recover now
+journalctl -u camview-recovery -f            # watch recovery logs
+```
+
+This workaround leaves RTSP unauthenticated on the camera LAN. Keep the
+camera isolated and never forward its RTSP port beyond the trusted network.
+
 ## Sound
 
 WebRTC audio only supports **Opus** and **G.711 (PCMU/PCMA)**. The
@@ -213,6 +263,7 @@ generated config are git-ignored and survive pulls:
 cd /path/to/camview
 git pull
 # first time only, or when bin/ is missing: ./setup.sh
+# after pulling a version that adds services/dependencies: sudo ./install.sh
 ```
 
 If the pull changed `gen-config.py`, refresh the running config:
@@ -268,6 +319,7 @@ spins up a scratch environment (two MediaMTX instances on alternate ports,
 a fake AAC test camera, the app under `php -S`) and runs:
 
 - `test_dewarp.py` — synthetic still-image mapping, orientation and raw-master checks.
+- `test_recovery.py` — fake RTSP health, camera targeting, SSH safety and backoff.
 - `test_api.py` — 30 API checks: setup, login, CSRF, validation, CRUD with
   live MediaMTX apply, probe/snapshot, roles.
 - `test_ui.py` — 13 headless-Chrome checks: first-run flow, login, grid,
@@ -285,6 +337,8 @@ Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packa
 - `motion.html` — motion timeline (lane per camera, hover thumbnails)
 - `motion.py` + `camview-motion.service` — motion detection supervisor
   (one keyframe-decoding ffmpeg per motion-enabled camera, 7-day retention)
+- `recovery.py` + `camview-recovery.service` — restores the UniFi 360
+  standalone RTSP workaround after camera reboots
 - `snapshots.html` — snapshot file management (view/download all users,
   delete/purge admin only)
 - `api/` — PHP backend (auth, CRUD, live test, snapshots, MediaMTX client)
@@ -299,4 +353,5 @@ Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packa
   install.sh)
 - `gen-config.py`, `transcode.py` — config generator + transcode watchdog
 - `dewarp.py` — cached still-image dual-panorama remapper
-- `run-tests.sh`, `test_dewarp.py`, `test_api.py`, `test_ui.py` — test suite
+- `run-tests.sh`, `test_dewarp.py`, `test_recovery.py`, `test_api.py`,
+  `test_ui.py` — test suite

@@ -3,14 +3,14 @@
 #   git clone https://github.com/xaxjon/camview.git && cd camview && sudo ./install.sh
 #
 # What it does:
-#   1. checks prerequisites (python3, php + php-curl, curl, tar; offers apt install)
+#   1. checks prerequisites (Python imaging, PHP, curl, tar, SSH; offers apt install)
 #   2. downloads bin/mediamtx + bin/ffmpeg (setup.sh) if missing
 #   3. creates data files (streams.json from example, users.json, snapshots/)
 #   4. generates mediamtx.yml
 #   5. sets ownership: files -> you, group -> web server (setgid), data files
 #      writable by the web server so the admin UI can save
-#   6. installs + enables + starts the mediamtx-viewer systemd service with the
-#      correct path for THIS directory
+#   6. installs + enables + starts the mediamtx-viewer, motion, and UniFi 360
+#      recovery systemd services with the correct path for THIS directory
 #
 # Env overrides: WEB_USER=www-data  SKIP_SYSTEMD=1  CAMVIEW_ALLOW_NONROOT=1
 set -euo pipefail
@@ -43,6 +43,8 @@ python3 -c 'import numpy' > /dev/null 2>&1 || missing+=(python3-numpy)
 python3 -c 'from PIL import Image' > /dev/null 2>&1 || missing+=(python3-pil)
 command -v curl    > /dev/null || missing+=(curl)
 command -v tar     > /dev/null || missing+=(tar)
+command -v ssh     > /dev/null || missing+=(openssh-client)
+command -v sshpass > /dev/null || missing+=(sshpass)
 command -v php     > /dev/null || missing+=(php-cli)
 if command -v php > /dev/null && ! php -m 2>/dev/null | grep -qi '^curl$'; then
   missing+=(php-curl)
@@ -77,6 +79,22 @@ fi
 [ -f users.json ] || touch users.json
 mkdir -p snapshots
 
+# Recovery credentials stay outside the web tree and are never committed.
+install -d -m 0700 -o root -g root /etc/camview
+if [ ! -f /etc/camview/recovery.env ]; then
+  umask 077
+  cat > /etc/camview/recovery.env << 'EOF'
+# UniFi 360 recovery SSH settings
+UNIFI360_SSH_USER=ubnt
+# Preferred, non-interactive key auth:
+# UNIFI360_SSH_KEY=/root/.ssh/camview_unifi360
+# Password fallback (choose one):
+# UNIFI360_SSH_PASSWORD=replace-me
+# UNIFI360_SSH_PASSWORD_FILE=/etc/camview/unifi360-password
+EOF
+fi
+chmod 0600 /etc/camview/recovery.env
+
 echo "== generating mediamtx.yml"
 python3 gen-config.py
 
@@ -101,6 +119,8 @@ else
   sed "s|__DIR__|$DIR|g" mediamtx-viewer.service > /etc/systemd/system/mediamtx-viewer.service
   echo "== installing camview-motion.service"
   sed "s|__DIR__|$DIR|g" camview-motion.service > /etc/systemd/system/camview-motion.service
+  echo "== installing camview-recovery.service"
+  sed "s|__DIR__|$DIR|g" camview-recovery.service > /etc/systemd/system/camview-recovery.service
   systemctl daemon-reload
   systemctl enable --now mediamtx-viewer
   systemctl is-active --quiet mediamtx-viewer \
@@ -110,6 +130,10 @@ else
   systemctl is-active --quiet camview-motion \
     && echo "   camview-motion active" \
     || { echo "   camview-motion FAILED to start — check: journalctl -u camview-motion -n 30" >&2; exit 1; }
+  systemctl enable --now camview-recovery
+  systemctl is-active --quiet camview-recovery \
+    && echo "   camview-recovery active" \
+    || { echo "   camview-recovery FAILED to start — check: journalctl -u camview-recovery -n 30" >&2; exit 1; }
 fi
 
 # ---------- apache ----------

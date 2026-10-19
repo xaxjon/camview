@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the camview test suites (API-level + UI-level) against a scratch
+# Run the camview test suites (unit + API-level + UI-level) against a scratch
 # environment: two throwaway MediaMTX instances on alternate ports, fake
 # cameras (AAC testsrc, moving mandelbrot, static color), and the app served
 # by PHP's built-in web server.
@@ -25,6 +25,7 @@ cp streams.json.example "$WORK/streams.json"
 # the viewer hardcodes WHEP port 8889; the test MediaMTX uses 28889
 sed -i 's/location\.hostname}:8889/location.hostname}:28889/' "$WORK/index.html"
 python3 test_dewarp.py || exit 1
+python3 test_recovery.py || exit 1
 
 # --- scratch MediaMTX instances ---
 cat > /tmp/mtx-test-camera.yml << 'EOF'   # hosts the fake cameras (publisher mode)
