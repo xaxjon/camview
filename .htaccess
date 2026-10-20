@@ -2,9 +2,9 @@
 # credentials and password hashes. NOTE: this file only works when the
 # vhost allows overrides; install.sh also installs an Apache conf snippet
 # (apache.conf) that does not depend on AllowOverride.
-<Files ~ "^(streams|users|settings)\.json$|^mediamtx\.yml$">
-    Require all denied
-</Files>
+# Require is not valid inside <Files> in this context, so use mod_alias here.
+RedirectMatch 404 (^|/)(streams|users|settings)\.json$
+RedirectMatch 404 (^|/)mediamtx\.yml$
 
 # Never serve VCS metadata from cloned deployments
 RedirectMatch 404 /\.git
