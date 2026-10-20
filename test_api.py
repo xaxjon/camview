@@ -6,6 +6,7 @@ import datetime
 import io
 import pathlib
 import re
+import shlex
 import tarfile
 import time
 import urllib.request
@@ -69,12 +70,17 @@ csrf = j.get("csrf")
 check("csrf token issued", bool(csrf))
 
 print("== camera CRUD + live apply ==")
-cam = {"name": "testcam", "source": "rtsp://127.0.0.1:18554/test", "transcode_audio": True,
-       "dewarp": True, "motion": True}
+cam = {"name": "testcam", "source": "rtsp://bridge:mrskylight$@127.0.0.1:18554/test",
+       "transcode_audio": True, "dewarp": True, "motion": True}
 s, j = api("cameras.php", "POST", cam); check("add without CSRF rejected", s == 403)
 s, j = api("cameras.php", "POST", cam, csrf)
 check("add camera", s == 200, j)
 check("path live in mediamtx", "testcam" in mtx_paths())
+with urllib.request.urlopen(MTX + "/v3/config/paths/get/testcam__raw") as r:
+    conf = json.loads(r.read())
+check("shell command preserves $ in password",
+      shlex.split(conf.get("runOnDemand", ""))[2] == cam["source"],
+      conf.get("runOnDemand"))
 s, j = api("cameras.php", "POST", cam, csrf); check("duplicate name rejected", s == 409)
 s, j = api("cameras.php", "POST", {"name": "bad name!", "source": "rtsp://x"}, csrf)
 check("invalid name rejected", s == 400)

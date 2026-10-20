@@ -30,6 +30,7 @@ String entries in the array are comments and skipped.
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -69,8 +70,8 @@ paths:
 # blocked in a network read ignores MediaMTX's SIGINT and leaks (frozen
 # camera, WiFi drop). The wrapper kills it after 20s without CPU activity.
 TRANSCODE_CMD = (
-    PYTHON + " {wrapper} {source} "
-    "rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
+    shlex.quote(PYTHON) + " {wrapper} {source} "
+    '"rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"'
 )
 SANITIZE_CMD = TRANSCODE_CMD  # same shape: wrapper, input, $RTSP_PORT/$MTX_PATH
 
@@ -114,7 +115,10 @@ def main():
         # every reader of the path at once
         if not FFMPEG.exists():
             sys.exit(f"{name}: sanitize wrapper needs {FFMPEG} — run ./setup.sh first")
-        rcmd = SANITIZE_CMD.format(wrapper=ROOT / "sanitize.py", source=source)
+        rcmd = SANITIZE_CMD.format(
+            wrapper=shlex.quote(str(ROOT / "sanitize.py")),
+            source=shlex.quote(source),
+        )
         lines.append(
             f"  {name}__raw:\n"
             f"    runOnDemand: {rcmd}\n"
@@ -130,7 +134,10 @@ def main():
         if s.get("transcode_audio") or s.get("transcode_video"):
             if not FFMPEG.exists():
                 sys.exit(f"{name}: transcode needs {FFMPEG} — run ./setup.sh first")
-            cmd = TRANSCODE_CMD.format(wrapper=ROOT / "transcode.py", source=raw)
+            cmd = TRANSCODE_CMD.format(
+                wrapper=shlex.quote(str(ROOT / "transcode.py")),
+                source=shlex.quote(raw),
+            )
             if s.get("transcode_video"):
                 cmd += " h264"  # re-encode HEVC -> H.264 for browsers
             lines.append(
