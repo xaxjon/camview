@@ -151,8 +151,9 @@ function dewarped_capture(string $raw, array $cam, int $width): array {
     $info = @getimagesize($raw);
     if (is_array($info) && isset($info[0])) $width = min($width, (int) $info[0]);
     $width = max(2, $width);
+    $offset = isset($cam['dewarp_offset']) ? (int) $cam['dewarp_offset'] : 0;
     $signature = substr(hash('sha256', json_encode([
-        DEWARP_VERSION, DEWARP_CIRCLE, $width, $stat['mtime'], $stat['size'],
+        DEWARP_VERSION, DEWARP_CIRCLE, $width, $offset, $stat['mtime'], $stat['size'],
     ])), 0, 16);
     $cache = "$base-$width-$signature.jpg";
     $valid = fn() => is_file($cache) && filesize($cache) > 2;
@@ -171,6 +172,7 @@ function dewarped_capture(string $raw, array $cam, int $width): array {
              . ' ' . escapeshellarg($raw) . ' ' . escapeshellarg($cache)
              . ' ' . (int) $width;
         foreach (DEWARP_CIRCLE as $v) $cmd .= ' ' . escapeshellarg(sprintf('%.6F', $v));
+        $cmd .= ' ' . (int) $offset;
         $output = [];
         exec($cmd . ' 2>&1', $output, $rc);
         if ($rc !== 0 || !$valid()) {
@@ -294,6 +296,7 @@ function load_cameras(): array {
             'transcode_audio' => !empty($s['transcode_audio']),
             'transcode_video' => !empty($s['transcode_video']),
             'dewarp' => !empty($s['dewarp']),
+            'dewarp_offset' => isset($s['dewarp_offset']) ? (int) $s['dewarp_offset'] : 0,
             'enabled' => ($s['enabled'] ?? true) !== false,
             'motion' => !empty($s['motion']),
             'motion_threshold' => isset($s['motion_threshold']) ? (float) $s['motion_threshold'] : null,
@@ -311,6 +314,7 @@ function save_cameras(array $cams): void {
         if (!empty($c['transcode_audio'])) $e['transcode_audio'] = true;
         if (!empty($c['transcode_video'])) $e['transcode_video'] = true;
         if (!empty($c['dewarp'])) $e['dewarp'] = true;
+        if (!empty($c['dewarp_offset'])) $e['dewarp_offset'] = (int) $c['dewarp_offset'];
         if (isset($c['enabled']) && !$c['enabled']) $e['enabled'] = false;
         if (!empty($c['motion'])) $e['motion'] = true;
         if (!empty($c['motion_threshold'])) $e['motion_threshold'] = (float) $c['motion_threshold'];

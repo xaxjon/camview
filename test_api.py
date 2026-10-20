@@ -71,7 +71,7 @@ check("csrf token issued", bool(csrf))
 
 print("== camera CRUD + live apply ==")
 cam = {"name": "testcam", "source": "rtsp://bridge:mrskylight$@127.0.0.1:18554/test",
-       "transcode_audio": True, "dewarp": True, "motion": True}
+       "transcode_audio": True, "dewarp": True, "dewarp_offset": 90, "motion": True}
 s, j = api("cameras.php", "POST", cam); check("add without CSRF rejected", s == 403)
 s, j = api("cameras.php", "POST", cam, csrf)
 check("add camera", s == 200, j)
@@ -86,6 +86,9 @@ s, j = api("cameras.php", "POST", {"name": "bad name!", "source": "rtsp://x"}, c
 check("invalid name rejected", s == 400)
 s, j = api("cameras.php", "POST", {"name": "ok", "source": "http://x"}, csrf)
 check("non-rtsp source rejected", s == 400)
+s, j = api("cameras.php", "POST", {"name": "offset", "source": "rtsp://x",
+                                  "dewarp": True, "dewarp_offset": 360}, csrf)
+check("out-of-range dewarp offset rejected", s == 400, j)
 
 # mediamtx drift: a leftover path (partial earlier save, manual restart)
 # must not make every later save fail with 502
@@ -102,12 +105,14 @@ s, j = api("cameras.php")
 row = next((c for c in j if c["name"] == "testcam"), {})
 check("admin sees source + status", row.get("source", "").startswith("rtsp://") and "status" in row, row)
 check("admin sees dewarp flag", row.get("dewarp") is True, row)
+check("admin sees dewarp offset", row.get("dewarp_offset") == 90, row)
 
 print("== motion timeline API ==")
 sj = json.loads(pathlib.Path("/tmp/camview-test/streams.json").read_text())
 entry = next(e for e in sj if isinstance(e, dict) and e.get("name") == "testcam")
 check("motion flag persisted in streams.json", entry.get("motion") is True, entry)
 check("dewarp flag persisted in streams.json", entry.get("dewarp") is True, entry)
+check("dewarp offset persisted in streams.json", entry.get("dewarp_offset") == 90, entry)
 s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "motion_threshold": 0.03}, csrf)
 check("set motion threshold", s == 200, j)
 sj = json.loads(pathlib.Path("/tmp/camview-test/streams.json").read_text())
@@ -254,7 +259,8 @@ vcsrf = j.get("csrf")
 s, j = api("cameras.php")
 check("viewer sees cameras without source", s == 200 and j and "source" not in j[0], j)
 row = next((c for c in j if c["name"] == "testcam"), {})
-check("viewer gets dewarp flag without source", row.get("dewarp") is True and "source" not in row, row)
+check("viewer gets dewarp settings without source",
+      row.get("dewarp") is True and row.get("dewarp_offset") == 90 and "source" not in row, row)
 s, j = api("cameras.php", "POST", {"name": "x", "source": "rtsp://x"}, vcsrf)
 check("viewer cannot add camera (403)", s == 403)
 s, j = api("users.php")

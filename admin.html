@@ -52,7 +52,7 @@
   #zone-rect { position: absolute; border: 2px dashed #ffd54f;
     background: rgba(255,213,79,.15); display: none; pointer-events: none; }
   #zone-modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
-  input[type=text], input[type=password] { padding: 7px; background: #111;
+  input[type=text], input[type=password], input[type=number] { padding: 7px; background: #111;
     border: 1px solid #333; border-radius: 4px; color: #ddd; width: 100%; }
   label.cb { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 
@@ -122,6 +122,10 @@
         <span class="badge">HEVC cameras — browsers only play H.264</span></label>
       <label class="cb"><input type="checkbox" id="f-dewarp"> UniFi 360 camera
         <span class="badge">dewarp fisheye into a dual panorama</span></label>
+      <div class="row" id="dewarp-offset-row" style="display:none">
+        <label>X axis offset (0–359°)</label>
+        <input type="number" id="f-offset" min="0" max="359" step="1" value="0">
+      </div>
       <label class="cb"><input type="checkbox" id="f-motion"> Motion detection
         <span class="badge">records JPEGs, see Motion page</span></label>
       <div class="row" id="motion-sens-row" style="display:none">
@@ -206,7 +210,8 @@ async function refresh() {
     tr.cells[2].title = c.source;
     tr.querySelector('[data-act=toggle]').addEventListener('change', async e => {
       await api('cameras.php', 'PUT', { original: c.name, name: c.name, source: c.source,
-        transcode_audio: c.transcode_audio, transcode_video: c.transcode_video, dewarp: c.dewarp, motion: c.motion,
+        transcode_audio: c.transcode_audio, transcode_video: c.transcode_video, dewarp: c.dewarp,
+        dewarp_offset: c.dewarp_offset, motion: c.motion,
         motion_threshold: c.motion_threshold, motion_source: c.motion_source,
         motion_zone: c.motion_zone,
         enabled: e.target.checked });
@@ -231,7 +236,10 @@ function openModal(cam) {
   document.getElementById('f-source').value = cam ? cam.source : '';
   document.getElementById('f-transcode').checked = cam ? cam.transcode_audio : false;
   document.getElementById('f-vtranscode').checked = cam ? !!cam.transcode_video : false;
-  document.getElementById('f-dewarp').checked = cam ? !!cam.dewarp : false;
+  const dewarp = cam ? !!cam.dewarp : false;
+  document.getElementById('f-dewarp').checked = dewarp;
+  document.getElementById('f-offset').value = cam && cam.dewarp_offset != null ? cam.dewarp_offset : 0;
+  document.getElementById('dewarp-offset-row').style.display = dewarp ? 'block' : 'none';
   document.getElementById('f-motion').checked = cam ? !!cam.motion : false;
   // sensitivity slider 0-9  <->  threshold 0.10..0.01 (5 = default 0.05)
   const thr = cam && cam.motion_threshold != null ? cam.motion_threshold : 0.05;
@@ -247,6 +255,9 @@ function closeModal() { document.getElementById('modal-bg').classList.remove('op
 
 document.getElementById('add').addEventListener('click', () => openModal(null));
 document.getElementById('cancel').addEventListener('click', closeModal);
+document.getElementById('f-dewarp').addEventListener('change', e => {
+  document.getElementById('dewarp-offset-row').style.display = e.target.checked ? 'block' : 'none';
+});
 document.getElementById('f-motion').addEventListener('change', e => {
   document.getElementById('motion-sens-row').style.display = e.target.checked ? 'block' : 'none';
 });
@@ -285,6 +296,7 @@ document.getElementById('save').addEventListener('click', async () => {
     transcode_audio: document.getElementById('f-transcode').checked,
     transcode_video: document.getElementById('f-vtranscode').checked,
     dewarp: document.getElementById('f-dewarp').checked,
+    dewarp_offset: parseInt(document.getElementById('f-offset').value, 10),
     motion: document.getElementById('f-motion').checked,
     motion_threshold: 0.10 - 0.01 * parseInt(document.getElementById('f-sens').value, 10),
     motion_zone: editing ? editingZone : null,
@@ -395,7 +407,7 @@ document.getElementById('zone-accept').addEventListener('click', async () => {
     await api('cameras.php', 'PUT', {
       original: zoneCam.name, name: zoneCam.name, source: zoneCam.source,
       transcode_audio: zoneCam.transcode_audio, transcode_video: zoneCam.transcode_video,
-      dewarp: zoneCam.dewarp, motion: zoneCam.motion,
+      dewarp: zoneCam.dewarp, dewarp_offset: zoneCam.dewarp_offset, motion: zoneCam.motion,
       motion_threshold: zoneCam.motion_threshold, motion_source: zoneCam.motion_source,
       enabled: zoneCam.enabled, motion_zone: zoneRect,
     });

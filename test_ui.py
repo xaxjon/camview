@@ -117,7 +117,10 @@ async def main():
           document.getElementById('f-name').value = 'testcam';
           document.getElementById('f-source').value = 'rtsp://127.0.0.1:18554/test';
           document.getElementById('f-transcode').checked = true;
-          document.getElementById('f-dewarp').checked = true;
+          const dewarp = document.getElementById('f-dewarp');
+          dewarp.checked = true;
+          dewarp.dispatchEvent(new Event('change'));
+          document.getElementById('f-offset').value = '90';
           document.getElementById('f-motion').checked = true;
         """)
         await js("document.getElementById('test').click()")
@@ -142,6 +145,8 @@ async def main():
         await js("[...document.querySelectorAll('#rows tr')].find(r => r.textContent.includes('testcam')).querySelector('[data-act=edit]').click()")
         await asyncio.sleep(0.5)
         check("dewarp checkbox round-trips", await js("document.getElementById('f-dewarp').checked") is True)
+        check("offset field visible", await js("document.getElementById('dewarp-offset-row').style.display") == "block")
+        check("offset round-trips", await js("document.getElementById('f-offset').value") == "90")
         check("slider visible when motion enabled", await js("document.getElementById('motion-sens-row').style.display") == "block")
         check("slider defaults to 5", await js("document.getElementById('f-sens').value") == "5")
         await js("document.getElementById('f-sens').value = '7'; document.getElementById('f-sens').dispatchEvent(new Event('input'))")

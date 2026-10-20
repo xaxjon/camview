@@ -17,6 +17,7 @@ if ($method === 'GET') {
             'enabled' => $c['enabled'],
             'motion' => $c['motion'],  // viewer needs it for the alarm bell
             'dewarp' => $c['dewarp'],  // viewer selects the fisheye renderer
+            'dewarp_offset' => $c['dewarp_offset'],
             'dewarp_circle' => $c['dewarp'] ? DEWARP_CIRCLE : null,
             'status' => $c['enabled'] ? ($status[$c['name']] ?? 'standby') : 'disabled',
         ];
@@ -49,12 +50,20 @@ function validated_camera(array $b): array {
     if ($zone !== null && parse_zone($zone) === null) {
         json_err('motion_zone must be [x, y, w, h] with 0..1 fractions inside the frame');
     }
+    $offsetValue = $b['dewarp_offset'] ?? 0;
+    if ($offsetValue === '' || $offsetValue === null) $offsetValue = 0;
+    if (!is_int($offsetValue) && (!is_string($offsetValue) || !preg_match('/^\d+$/', $offsetValue))) {
+        json_err('dewarp_offset must be an integer from 0 to 359');
+    }
+    $offset = (int) $offsetValue;
+    if ($offset < 0 || $offset > 359) json_err('dewarp_offset must be an integer from 0 to 359');
     return [
         'name' => $name,
         'source' => $source,
         'transcode_audio' => !empty($b['transcode_audio']),
         'transcode_video' => !empty($b['transcode_video']),
         'dewarp' => !empty($b['dewarp']),
+        'dewarp_offset' => $offset,
         'enabled' => ($b['enabled'] ?? true) !== false,
         'motion' => !empty($b['motion']),
         'motion_threshold' => isset($b['motion_threshold']) && $b['motion_threshold'] !== ''

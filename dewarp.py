@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Dewarp one circular-fisheye JPEG into a dual-panorama JPEG.
 
-Usage: dewarp.py <source> <destination> <max-width> <cx> <cy> <radius>
+Usage: dewarp.py <source> <destination> <max-width> <cx> <cy> <radius> [offset]
 
 Circle values are normalized: cx by source width, cy and radius by source
-height. The destination is capped at the source width and written atomically.
+height. Offset is the X-axis/azimuth offset in degrees. The destination is
+capped at the source width and written atomically.
 """
 import argparse
 import os
@@ -21,7 +22,9 @@ def output_width(value):
     return width
 
 
-def dewarp(source, destination, requested_width, circle):
+def dewarp(source, destination, requested_width, circle, offset=0.0):
+    if not 0 <= offset <= 359:
+        raise ValueError("offset must be between 0 and 359 degrees")
     with Image.open(source) as image:
         src = np.array(image.convert("RGB"), dtype=np.uint8, copy=True)
 
@@ -34,11 +37,12 @@ def dewarp(source, destination, requested_width, circle):
     cx = np.float32(circle[0] * source_width)
     cy = np.float32(circle[1] * source_height)
     radius = np.float32(circle[2] * source_height)
+    azimuth_offset = np.float32(offset * np.pi / 180.0)
     u = (np.arange(width, dtype=np.float32) + np.float32(0.5)) / np.float32(width)
     cos_phi = []
     sin_phi = []
     for strip in (0, 1):
-        phi = (np.float32(strip) + u) * np.float32(np.pi)
+        phi = azimuth_offset + (np.float32(strip) + u) * np.float32(np.pi)
         cos_phi.append(np.cos(phi))
         sin_phi.append(np.sin(phi))
 
@@ -90,10 +94,11 @@ def main():
     parser.add_argument("cx", type=float)
     parser.add_argument("cy", type=float)
     parser.add_argument("radius", type=float)
+    parser.add_argument("offset", type=float, nargs="?", default=0.0)
     args = parser.parse_args()
     try:
         dewarp(args.source, args.destination, args.width,
-               (args.cx, args.cy, args.radius))
+               (args.cx, args.cy, args.radius), args.offset)
     except Exception as e:
         parser.exit(1, f"dewarp: {e}\n")
 

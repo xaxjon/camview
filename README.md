@@ -18,7 +18,8 @@ user management and a camera config UI. No build step, no framework.
   running MediaMTX instantly — no service restart.
 - **UniFi 360 dewarping**: tick **UniFi 360 camera** for a circular-fisheye
   RTSP source. The viewer uses WebGL2 to render two upright 180° panorama
-  strips in the browser; no server-side re-encode is added. The G6 Pro 360
+  strips in the browser; no server-side re-encode is added. The optional
+  **X axis offset** (0–359°) virtually rotates the panorama. The G6 Pro 360
   `s1` stream is the recommended starting point. Browsers without WebGL2
   fall back to the original fisheye view.
 - **User management** (`users.html`): create users, set roles, reset
@@ -184,7 +185,8 @@ generated on the first request and then served from `snapshots/.dewarp/`
 (which is protected like the other capture files). Thumbnail URLs use
 `thumb=1`; append `raw=1` to a snapshot or motion image URL for the original.
 Snapshot archives contain `*-pano.jpg` by default. The first remap uses CPU
-(NumPy + Pillow); cache hits are plain file reads. Derivatives are deleted
+(NumPy + Pillow); cache hits are plain file reads. The same X axis offset
+applies, and changing it creates fresh cached panoramas. Derivatives are deleted
 with their masters and included in the motion storage cap. Motion detection
 and motion zones always stay on the raw stream.
 

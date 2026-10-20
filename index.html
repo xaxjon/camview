@@ -469,6 +469,7 @@ uniform sampler2D uFrame;
 uniform vec2 uOutputSize;
 uniform vec2 uSourceSize;
 uniform vec3 uCircle;
+uniform float uOffset;
 uniform float uSeparator;
 out vec4 outColor;
 const float PI = 3.141592653589793;
@@ -485,7 +486,7 @@ void main() {
   float yLocal = p.y - strip * (stripHeight + uSeparator);
   float u = p.x / uOutputSize.x;
   float v = yLocal / stripHeight;
-  float phi = (strip + u) * PI;
+  float phi = uOffset + (strip + u) * PI;
   float rho = (1.0 - v) * uCircle.z * uSourceSize.y;
   vec2 source = vec2(
     uCircle.x * uSourceSize.x + rho * cos(phi),
@@ -508,7 +509,7 @@ function dewarpShader(gl, type, source) {
   return shader;
 }
 
-function createDewarpRenderer(video, canvas, circle = DEWARP_CIRCLE) {
+function createDewarpRenderer(video, canvas, circle = DEWARP_CIRCLE, offset = 0) {
   try {
     const gl = canvas.getContext('webgl2', {
       alpha: false, antialias: false, depth: false, stencil: false,
@@ -555,6 +556,7 @@ function createDewarpRenderer(video, canvas, circle = DEWARP_CIRCLE) {
     const separatorLoc = gl.getUniformLocation(program, 'uSeparator');
     gl.uniform1i(gl.getUniformLocation(program, 'uFrame'), 0);
     gl.uniform3f(gl.getUniformLocation(program, 'uCircle'), ...circle);
+    gl.uniform1f(gl.getUniformLocation(program, 'uOffset'), offset);
     gl.clearColor(0, 0, 0, 1);
 
     let running = false;
@@ -643,7 +645,8 @@ function makeTile(stream) {
     dewarpCanvas = document.createElement('canvas');
     dewarpCanvas.className = 'dewarp-canvas';
     dewarpCanvas.setAttribute('aria-label', 'Dewarped 360 degree panorama');
-    dewarp = createDewarpRenderer(video, dewarpCanvas, stream.dewarp_circle || DEWARP_CIRCLE);
+    dewarp = createDewarpRenderer(video, dewarpCanvas, stream.dewarp_circle || DEWARP_CIRCLE,
+      Number(stream.dewarp_offset || 0) * Math.PI / 180);
     if (dewarp) tile.classList.add('dewarp');
   }
 
