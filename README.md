@@ -54,7 +54,8 @@ user management and a camera config UI. No build step, no framework.
 - **python3 + NumPy + Pillow** (`python3 python3-numpy python3-pil`) — generates
   the MediaMTX config, runs the wrappers, and dewarps stored still images
 - **OpenSSH client + sshpass** (`openssh-client sshpass`) — UniFi 360 recovery
-- MediaMTX + ffmpeg binaries: downloaded by the installer (`setup.sh`)
+- MediaMTX + ffmpeg: MediaMTX is downloaded by the installer (`setup.sh`);
+  ffmpeg uses the static build when available, otherwise the distro package
 
 ## Deploy (fresh Ubuntu/Debian server)
 
