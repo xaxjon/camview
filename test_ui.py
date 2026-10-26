@@ -659,7 +659,8 @@ if (!window.__origFetch) {
         check("mobile: motion lane name compact", namew == 96, namew)
         check("mobile: motion burger visible",
               await js("getComputedStyle(document.getElementById('burger')).display") != "none")
-        await send("Emulation.clearDeviceMetricsOverride")
+        await send("Emulation.setDeviceMetricsOverride",
+                   {"width": 1600, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         await nav("index.html")
         await asyncio.sleep(1.5)
         w2 = await js("document.querySelector('.tile')?.getBoundingClientRect().width")
@@ -677,10 +678,10 @@ if (!window.__origFetch) {
                 break
         check("logged-out viewer redirects to login", bool(path) and path.endswith("login.html"), path)
 
-        print("== optional public montage ==")
+        print("== optional public mosaic ==")
         await nav("free.html")
         check("free page disabled without free user",
-              await js("document.getElementById('empty')?.textContent") == "Public montage is not enabled")
+              await js("document.getElementById('empty')?.textContent") == "Public mosaic is not enabled")
         await nav("login.html")
         await js("""
           document.getElementById('username').value = 'admin';
@@ -688,33 +689,40 @@ if (!window.__origFetch) {
           document.getElementById('form').dispatchEvent(new Event('submit', {cancelable: true}));
         """)
         await asyncio.sleep(2)
-        await js("""(async function(){
+        setup_free = await send("Runtime.evaluate", {"expression": """(async function(){
           const me = await (await fetch('api/me.php')).json();
-          await fetch('api/users.php', {method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf},
+          const headers = {'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf};
+          const userRes = await fetch('api/users.php', {method: 'POST', headers,
             body: JSON.stringify({username: 'free', password: 'freepass1', role: 'viewer'})});
-        })()""", )
-        await asyncio.sleep(1)
+          if (!userRes.ok) return 'could not create free user';
+          const cams = await (await fetch('api/cameras.php?all=1')).json();
+          const cam = cams.find(c => c.name === 'testcam');
+          const camRes = await fetch('api/cameras.php', {method: 'PUT', headers,
+            body: JSON.stringify({...cam, original: 'testcam', enabled: true})});
+          return camRes.ok ? 'ok' : 'could not enable test camera';
+        })()""", "returnByValue": True, "awaitPromise": True})
+        check("prepare live camera for public mosaic",
+              setup_free.get("result", {}).get("result", {}).get("value") == "ok", setup_free)
         await js("document.getElementById('logout').click()")
         await asyncio.sleep(1)
         await nav("free.html")
         tiles = None
         for _ in range(15):
             await asyncio.sleep(1)
-            tiles = await js("document.querySelectorAll('.tile').length")
-            if tiles == 2:
+            tiles = await js("document.querySelectorAll('#grid video').length")
+            if tiles == 3:
                 break
         check("free page opens without login", (await js("location.pathname")).endswith("free.html"))
-        check("free page shows enabled camera montage", tiles == 2, tiles)
-        check("free page has no menus or action controls", await js(
-              "!document.querySelector('#bar, #menu, nav, button, .snap, .bell, .mute')"))
+        check("free page shows enabled camera mosaic", tiles == 3, tiles)
+        check("free page has only video tiles", await js(
+              "!document.querySelector('#bar, #menu, nav, button, .label, .snap, .bell, .mute')"))
         streaming = False
         for _ in range(20):
-            streaming = await js("[...document.querySelectorAll('.tile video')].some(v => v.srcObject)")
+            streaming = await js("!!document.querySelector('#grid video[title=testcam]')?.srcObject")
             if streaming:
                 break
             await asyncio.sleep(1)
-        check("free montage receives video anonymously", bool(streaming), streaming)
+        check("free mosaic receives video anonymously", bool(streaming), streaming)
 
 try:
     asyncio.run(main())

@@ -24,10 +24,10 @@ user management and a camera config UI. No build step, no framework.
   fall back to the original fisheye view.
 - **User management** (`users.html`): create users, set roles, reset
   passwords; protects the last admin.
-- **Optional public montage** (`free.html`): creating a user named exactly
-  `free` enables a basic, login-free camera grid with no menus or action
-  buttons. Deleting that user disables it. Only enabled cameras are shown;
-  UniFi 360 dewarping and rotation offsets work here too.
+- **Optional public mosaic** (`free.html`): creating a user named exactly
+  `free` enables a basic, login-free grid of live camera tiles with no menus,
+  labels or controls. Deleting that user disables it. Only enabled cameras
+  are shown; 360° cameras use their raw fisheye view on this page.
 - **Live status dots** per camera (streaming / standby / disabled).
 - **Enable/disable** a camera without losing its config.
 - **Snapshots**: the 📷 button on a tile saves a JPEG on the server
@@ -296,7 +296,7 @@ touches them.
   `http://<server>/camview/free.html` (adjust the path for your installation).
   It exposes live video only, not camera credentials, recordings, snapshots,
   configuration, or administration. Deleting `free` immediately disables its
-  camera-list API; already open pages stop on their next status refresh.
+  camera-list API and prevents new mosaic pages from opening it.
 - Use HTTPS in front of Apache if logins cross untrusted links.
 
 ## Headless / no-PHP mode
@@ -337,14 +337,14 @@ a fake AAC test camera, the app under `php -S`) and runs:
   live MediaMTX apply, probe/snapshot, roles and optional public access.
 - `test_ui.py` — headless-Chrome checks: first-run flow, login, grid,
   admin add-camera with live test, disable toggle, logout gating and the
-  anonymous montage.
+  anonymous mosaic.
 
 Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packages.
 
 ## Files
 
 - `index.html` — viewer grid (login required)
-- `free.html` + `api/free.php` — optional anonymous montage, gated by the
+- `free.html` + `api/free.php` — optional anonymous mosaic, gated by the
   `free` user
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)

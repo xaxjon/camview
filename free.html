@@ -6,463 +6,88 @@
 <meta name="robots" content="noindex">
 <title>Camview</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: #111; color: #ddd;
-    font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
-  #stage { height: 100%; display: flex; align-items: center; justify-content: center; }
-  #grid { display: grid; gap: 4px; }
-  .tile { position: relative; background: #000; overflow: hidden;
-    border: 1px solid #2a2a2a; border-radius: 4px; }
-  .tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .tile.dewarp > video { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
-  .tile .dewarp-canvas { position: absolute; inset: 0; width: 100%; height: 100%;
-    display: block; background: #000; pointer-events: none; }
-  .tile .label, .tile .dot, .tile .status { z-index: 1; }
-  .tile .label { position: absolute; left: 0; bottom: 0; padding: 2px 8px;
-    background: rgba(0,0,0,.55); font-size: 12px; border-radius: 0 4px 0 0;
-    pointer-events: none; }
-  .tile .dot { position: absolute; left: 8px; top: 8px; width: 10px; height: 10px;
-    border-radius: 50%; background: #777; pointer-events: none; }
-  .tile .dot.online { background: #4caf50; }
-  .tile .status { position: absolute; inset: 0; display: flex;
-    align-items: center; justify-content: center; color: #999;
-    background: rgba(0,0,0,.35); font-size: 13px; pointer-events: none; }
-  .tile .status[hidden] { display: none; }
-  #empty { padding: 20px; color: #888; text-align: center; }
-  @media (max-width: 700px) {
-    html, body { overflow: auto; height: auto; }
-    #stage { display: block; height: auto; padding: 4px; }
-    #grid { display: block; }
-    .tile { width: 100%; aspect-ratio: 16/9; margin-bottom: 4px; }
-  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #000; color: #aaa; font: 14px system-ui, sans-serif; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 2px; align-content: center; min-height: 100vh; }
+  video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; }
+  #empty { grid-column: 1/-1; padding: 20px; text-align: center; }
+  @media (max-width: 600px) { #grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-  <div id="stage"><div id="grid"></div></div>
-
+  <div id="grid"></div>
 <script>
 'use strict';
 
 const grid = document.getElementById('grid');
-const peers = new Map();
-const streamCtls = new Map();
-
-function bestLayout(n, W, H) {
-  let best = null;
-  for (let cols = 1; cols <= n; cols++) {
-    const rows = Math.ceil(n / cols);
-    let w = W / cols, h = w * 9 / 16;
-    if (h * rows > H) { h = H / rows; w = h * 16 / 9; }
-    if (!best || w * h > best.w * best.h) best = { cols, w, h };
-  }
-  return best;
-}
-
-function layout() {
-  const tiles = grid.children;
-  if (!tiles.length) return;
-  if (window.innerWidth <= 700) {
-    grid.style.gridTemplateColumns = '';
-    grid.style.gridAutoRows = '';
-    return;
-  }
-  const stage = document.getElementById('stage');
-  const W = stage.clientWidth - 8, H = stage.clientHeight - 8;
-  const { cols, w, h } = bestLayout(tiles.length, W, H);
-  grid.style.gridTemplateColumns = `repeat(${cols}, ${Math.floor(w - 4)}px)`;
-  grid.style.gridAutoRows = `${Math.floor(h - 4)}px`;
-}
-window.addEventListener('resize', layout);
 
 function waitForIce(pc) {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise(resolve => {
-    const done = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', done);
-        resolve();
-      }
-    };
-    pc.addEventListener('icegatheringstatechange', done);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') resolve();
+    });
     setTimeout(resolve, 2000);
   });
 }
 
-async function connect(name, video) {
-  const pc = new RTCPeerConnection();
-  try {
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    let trackResolver = null;
-    pc.ontrack = e => {
-      video.srcObject = e.streams[0];
-      if (trackResolver) { trackResolver(); trackResolver = null; }
-    };
-    await pc.setLocalDescription(await pc.createOffer());
-    await waitForIce(pc);
-    const url = `http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`;
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 10000);
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: pc.localDescription.sdp,
-      signal: ctrl.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`WHEP ${res.status}`);
-    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
-    peers.set(name, pc);
-    if (!video.srcObject) {
-      await Promise.race([
-        new Promise(resolve => { trackResolver = resolve; }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('no track within 10s')), 10000)),
-      ]);
-    }
-    return pc;
-  } catch (err) {
-    pc.close();
-    throw err;
-  }
-}
-
-function untilDead(pc) {
-  return new Promise(resolve => {
-    const timer = setInterval(() => {
-      if (['failed', 'closed'].includes(pc.connectionState)) {
-        clearInterval(timer);
-        resolve();
-      }
-    }, 2000);
-    if (pc.connectionState === 'closed') { clearInterval(timer); return resolve(); }
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'closed'].includes(pc.connectionState)) {
-        clearInterval(timer);
-        resolve();
-      }
-    };
-  });
-}
-
-function stopStream(name) {
-  const ctl = streamCtls.get(name);
-  if (!ctl) return;
-  ctl.active = false;
-  ctl.gen = (ctl.gen || 0) + 1;
-  if (ctl.wake) ctl.wake();
-  const pc = peers.get(name);
-  if (pc) { try { pc.close(); } catch {} }
-  peers.delete(name);
-  ctl.dewarp?.stop();
-  ctl.video.srcObject = null;
-}
-
-async function runStream(name, ctl) {
-  const { video, status } = ctl;
-  ctl.dewarp?.start();
-  const myGen = ctl.gen || 0;
-  const alive = () => ctl.active && (ctl.gen || 0) === myGen;
-  ctl.attempt = 0;
-  let lastTime = -1, lastProgress = Date.now();
-  const watchdog = setInterval(() => {
-    if (!alive()) { clearInterval(watchdog); return; }
-    const pc = peers.get(name);
-    if (!pc) return;
-    if (video.currentTime !== lastTime) {
-      lastTime = video.currentTime;
-      lastProgress = Date.now();
-    } else if (!video.paused && video.readyState >= 2 && Date.now() - lastProgress > 8000) {
-      pc.close();
-    } else if (['failed', 'disconnected'].includes(pc.iceConnectionState) &&
-               Date.now() - lastProgress > 8000) {
-      pc.close();
-    }
-  }, 2000);
-
-  for (;;) {
-    if (!alive()) break;
-    try {
-      status.textContent = ctl.attempt ? 'reconnecting…' : 'connecting…';
-      status.hidden = false;
-      const pc = await connect(name, video);
-      if (!alive()) { pc.close(); break; }
-      ctl.attempt = 0;
-      lastTime = -1;
-      lastProgress = Date.now();
-      status.hidden = true;
-      await untilDead(pc);
-    } catch (err) {
-      console.warn(new Date().toISOString(), name, err);
-    }
-    if (!alive()) break;
-    const pc = peers.get(name);
-    if (pc) { try { pc.close(); } catch {} }
-    peers.delete(name);
-    video.srcObject = null;
-    ctl.attempt++;
-    const wait = Math.min(15000, 2000 * ctl.attempt);
-    status.textContent = `offline — retrying in ${Math.round(wait / 1000)}s…`;
-    status.hidden = false;
-    await new Promise(resolve => { ctl.wake = resolve; setTimeout(resolve, wait); });
-  }
-}
-
-let suspended = false;
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
-    suspended = true;
-    for (const name of streamCtls.keys()) {
-      stopStream(name);
-      const status = grid.querySelector(`.tile[data-name="${CSS.escape(name)}"] .status`);
-      if (status) { status.textContent = 'paused'; status.hidden = false; }
-    }
-  } else if (suspended) {
-    suspended = false;
-    for (const [name, ctl] of streamCtls) {
-      if (!ctl.active) { ctl.active = true; runStream(name, ctl); }
-    }
-    refreshStatus();
-  }
-});
-
-const DEWARP_CIRCLE = [0.519201, 0.499414, 0.494428];
-const DEWARP_VERTEX_SHADER = `#version 300 es
-in vec2 aPosition;
-void main() { gl_Position = vec4(aPosition, 0.0, 1.0); }
-`;
-const DEWARP_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-uniform sampler2D uFrame;
-uniform vec2 uOutputSize;
-uniform vec2 uSourceSize;
-uniform vec3 uCircle;
-uniform float uOffset;
-uniform float uSeparator;
-out vec4 outColor;
-const float PI = 3.141592653589793;
-void main() {
-  vec2 p = vec2(gl_FragCoord.x, uOutputSize.y - gl_FragCoord.y);
-  float stripHeight = (uOutputSize.y - uSeparator) * 0.5;
-  if (p.y >= stripHeight && p.y < stripHeight + uSeparator) {
-    outColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
-  float strip = p.y < stripHeight ? 0.0 : 1.0;
-  float yLocal = p.y - strip * (stripHeight + uSeparator);
-  float u = p.x / uOutputSize.x;
-  float v = yLocal / stripHeight;
-  float phi = uOffset + (strip + u) * PI;
-  float rho = (1.0 - v) * uCircle.z * uSourceSize.y;
-  vec2 source = vec2(
-    uCircle.x * uSourceSize.x + rho * cos(phi),
-    uCircle.y * uSourceSize.y + rho * sin(phi));
-  vec2 uv = vec2(source.x / uSourceSize.x, source.y / uSourceSize.y);
-  outColor = texture(uFrame, uv);
-}
-`;
-
-function dewarpShader(gl, type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const error = gl.getShaderInfoLog(shader) || 'shader compilation failed';
-    gl.deleteShader(shader);
-    throw new Error(error);
-  }
-  return shader;
-}
-
-function createDewarpRenderer(video, canvas, circle = DEWARP_CIRCLE, offset = 0) {
-  try {
-    const gl = canvas.getContext('webgl2', {
-      alpha: false, antialias: false, depth: false, stencil: false,
-      preserveDrawingBuffer: false,
-    });
-    if (!gl) return null;
-    const program = gl.createProgram();
-    const vertex = dewarpShader(gl, gl.VERTEX_SHADER, DEWARP_VERTEX_SHADER);
-    const fragment = dewarpShader(gl, gl.FRAGMENT_SHADER, DEWARP_FRAGMENT_SHADER);
-    gl.attachShader(program, vertex);
-    gl.attachShader(program, fragment);
-    gl.linkProgram(program);
-    gl.deleteShader(vertex);
-    gl.deleteShader(fragment);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(gl.getProgramInfoLog(program) || 'shader link failed');
-    }
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
-    ]), gl.STATIC_DRAW);
-    const position = gl.getAttribLocation(program, 'aPosition');
-    gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-    const texture = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.useProgram(program);
-    const outputSizeLoc = gl.getUniformLocation(program, 'uOutputSize');
-    const sourceSizeLoc = gl.getUniformLocation(program, 'uSourceSize');
-    const separatorLoc = gl.getUniformLocation(program, 'uSeparator');
-    gl.uniform1i(gl.getUniformLocation(program, 'uFrame'), 0);
-    gl.uniform3f(gl.getUniformLocation(program, 'uCircle'), ...circle);
-    gl.uniform1f(gl.getUniformLocation(program, 'uOffset'), offset);
-    gl.clearColor(0, 0, 0, 1);
-    let running = false;
-    let animationFrame = 0;
-    let resizeKey = '';
-    let sourceWidth = 0;
-    let sourceHeight = 0;
-
-    function resize() {
-      const rect = canvas.getBoundingClientRect();
-      const cssSize = Math.min(rect.width, rect.height);
-      if (cssSize < 2) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const key = `${Math.round(cssSize * 100)}:${dpr}`;
-      if (key === resizeKey) return;
-      resizeKey = key;
-      const width = Math.max(2, Math.min(2048, Math.round(cssSize * dpr)));
-      const separator = Math.max(1, Math.round(width / 512));
-      const height = width + separator;
-      canvas.width = width;
-      canvas.height = height;
-      gl.viewport(0, 0, width, height);
-      gl.uniform2f(outputSizeLoc, width, height);
-      gl.uniform1f(separatorLoc, separator);
-    }
-
-    function draw() {
-      if (!running) return;
-      resize();
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        if (video.videoWidth !== sourceWidth || video.videoHeight !== sourceHeight) {
-          sourceWidth = video.videoWidth;
-          sourceHeight = video.videoHeight;
-          gl.uniform2f(sourceSizeLoc, sourceWidth, sourceHeight);
-        }
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-      }
-      animationFrame = requestAnimationFrame(draw);
-    }
-
-    function start() {
-      if (running) return;
-      running = true;
-      resize();
-      animationFrame = requestAnimationFrame(draw);
-    }
-
-    function stop() {
-      running = false;
-      if (animationFrame) cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-    }
-
-    canvas.addEventListener('webglcontextlost', e => {
-      e.preventDefault();
-      stop();
-      canvas.style.display = 'none';
-      video.style.opacity = '1';
-    });
-    return { start, stop, resize };
-  } catch (err) {
-    console.warn('dewarp initialization failed:', err);
-    return null;
-  }
-}
-
-function makeTile(stream) {
-  const tile = document.createElement('div');
-  tile.className = 'tile';
-  tile.dataset.name = stream.name;
+function watch(name) {
   const video = document.createElement('video');
   video.muted = true;
   video.autoplay = true;
   video.playsInline = true;
-  let dewarp = null;
-  if (stream.dewarp) {
-    const canvas = document.createElement('canvas');
-    canvas.className = 'dewarp-canvas';
-    canvas.setAttribute('aria-label', 'Dewarped 360 degree panorama');
-    dewarp = createDewarpRenderer(video, canvas, stream.dewarp_circle || DEWARP_CIRCLE,
-      Number(stream.dewarp_offset || 0) * Math.PI / 180);
-    if (dewarp) { tile.classList.add('dewarp'); tile.append(video, canvas); }
-  }
-  if (!tile.contains(video)) tile.appendChild(video);
-  const label = document.createElement('div');
-  label.className = 'label';
-  label.textContent = stream.name;
-  const dot = document.createElement('div');
-  dot.className = 'dot';
-  if (stream.status === 'online') dot.classList.add('online');
-  const status = document.createElement('div');
-  status.className = 'status';
-  tile.append(label, dot, status);
-  grid.appendChild(tile);
-  layout();
-  const ctl = { active: true, video, status, dewarp, wake: null };
-  streamCtls.set(stream.name, ctl);
-  runStream(stream.name, ctl);
-}
+  video.title = name;
+  grid.appendChild(video);
+  let pc = null;
+  let retry = null;
 
-function showMessage(message) {
-  for (const name of [...streamCtls.keys()]) stopStream(name);
-  streamCtls.clear();
-  grid.replaceChildren();
-  const empty = document.createElement('p');
-  empty.id = 'empty';
-  empty.textContent = message;
-  grid.appendChild(empty);
-}
-
-async function fetchCameras() {
-  const res = await fetch('api/free.php', { cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 404) showMessage('Public montage is not enabled');
-    throw new Error(data.error || `API error ${res.status}`);
-  }
-  return data;
-}
-
-async function refreshStatus() {
-  try {
-    const cams = await fetchCameras();
-    for (const c of cams) {
-      const dot = grid.querySelector(`.tile[data-name="${CSS.escape(c.name)}"] .dot`);
-      if (dot) dot.classList.toggle('online', c.status === 'online');
+  async function connect() {
+    clearTimeout(retry);
+    if (pc) pc.close();
+    pc = new RTCPeerConnection();
+    const current = pc;
+    try {
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.ontrack = e => { video.srcObject = e.streams[0]; };
+      pc.onconnectionstatechange = () => {
+        if (pc === current && ['failed', 'disconnected'].includes(pc.connectionState)) {
+          retry = setTimeout(connect, 3000);
+        }
+      };
+      await pc.setLocalDescription(await pc.createOffer());
+      await waitForIce(pc);
+      const res = await fetch(`http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription.sdp,
+      });
+      if (!res.ok) throw new Error(`WHEP ${res.status}`);
+      await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+    } catch {
+      current.close();
+      retry = setTimeout(connect, 3000);
     }
-  } catch { /* retain the current montage during temporary network failures */ }
+  }
+  connect();
 }
 
 async function init() {
-  let streams;
-  try {
-    streams = await fetchCameras();
-  } catch (err) {
-    if (!document.getElementById('empty')) showMessage('Camera service unavailable');
+  const res = await fetch('api/free.php', { cache: 'no-store' });
+  const cameras = await res.json();
+  if (!res.ok) {
+    grid.innerHTML = '<p id="empty">Public mosaic is not enabled</p>';
     return;
   }
-  if (!streams.length) { showMessage('No cameras configured'); return; }
-  streams.forEach((stream, i) => setTimeout(() => makeTile(stream), i * 250));
-  setInterval(() => { if (document.visibilityState === 'visible') refreshStatus(); }, 15000);
+  if (!cameras.length) {
+    grid.innerHTML = '<p id="empty">No cameras configured</p>';
+    return;
+  }
+  cameras.forEach(camera => watch(camera.name));
 }
-
-window.addEventListener('beforeunload', () => peers.forEach(pc => pc.close()));
-init();
+init().catch(() => {
+  grid.innerHTML = '<p id="empty">Camera service unavailable</p>';
+});
 </script>
 </body>
 </html>

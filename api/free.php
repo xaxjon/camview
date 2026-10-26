@@ -11,18 +11,10 @@ foreach (load_users() as $u) {
         break;
     }
 }
-if (!$enabled) json_err('public montage is not enabled', 404);
+if (!$enabled) json_err('public mosaic is not enabled', 404);
 
-$status = mtx_path_status();
 $out = [];
 foreach (load_cameras() as $c) {
-    if (!$c['enabled']) continue;
-    $out[] = [
-        'name' => $c['name'],
-        'dewarp' => $c['dewarp'],
-        'dewarp_offset' => $c['dewarp_offset'],
-        'dewarp_circle' => $c['dewarp'] ? DEWARP_CIRCLE : null,
-        'status' => $status[$c['name']] ?? 'standby',
-    ];
+    if ($c['enabled']) $out[] = ['name' => $c['name']];
 }
 json_out($out);
