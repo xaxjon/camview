@@ -714,6 +714,12 @@ if (!window.__origFetch) {
                 break
         check("free page opens without login", (await js("location.pathname")).endswith("free.html"))
         check("free page shows enabled camera mosaic", tiles == 3, tiles)
+        layout5 = await js("bestLayout(5, 1920, 1080)")
+        check("five-camera mosaic enlarges tiles on 1080p display",
+              isinstance(layout5, dict) and layout5["rows"] <= 3
+              and layout5["w"] * layout5["h"] > 200000, layout5)
+        tile_height = await js("document.querySelector('#grid video').getBoundingClientRect().height")
+        check("mosaic tiles enlarge to use display", tile_height > 400, tile_height)
         check("free page has only video tiles", await js(
               "!document.querySelector('#bar, #menu, nav, button, .label, .snap, .bell, .mute')"))
         streaming = False
