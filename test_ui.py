@@ -682,6 +682,9 @@ if (!window.__origFetch) {
         await nav("free.html")
         check("free page disabled without free user",
               await js("document.getElementById('empty')?.textContent") == "Public mosaic is not enabled")
+        await nav("1.html")
+        check("numbered page disabled without free user",
+              await js("document.getElementById('empty')?.textContent") == "Public camera view is not enabled")
         await nav("login.html")
         await js("""
           document.getElementById('username').value = 'admin';
@@ -729,6 +732,31 @@ if (!window.__origFetch) {
                 break
             await asyncio.sleep(1)
         check("free mosaic receives video anonymously", bool(streaming), streaming)
+
+        print("== numbered full-screen public cameras ==")
+        expected = {1: "front-door", 2: "driveway", 3: "testcam"}
+        for number in range(1, 6):
+            await nav(f"{number}.html")
+            if number in expected:
+                check(f"camera {number} selects the correct stream",
+                      await js("document.getElementById('camera')?.title") == expected[number])
+                check(f"camera {number} is full screen", await js("""(function(){
+                  const v = document.getElementById('camera');
+                  return v && v.getBoundingClientRect().width === innerWidth
+                    && v.getBoundingClientRect().height === innerHeight
+                    && !document.querySelector('nav, button');
+                })()"""))
+            else:
+                check(f"camera {number} reports an unavailable position",
+                      await js("document.getElementById('empty')?.textContent") == "Camera not available")
+        await nav("3.html")
+        streaming = False
+        for _ in range(20):
+            streaming = await js("!!document.getElementById('camera')?.srcObject")
+            if streaming:
+                break
+            await asyncio.sleep(1)
+        check("numbered page receives video anonymously", bool(streaming), streaming)
 
 try:
     asyncio.run(main())

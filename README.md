@@ -28,6 +28,8 @@ user management and a camera config UI. No build step, no framework.
   `free` enables a basic, login-free grid of live camera tiles with no menus,
   labels or controls. Deleting that user disables it. Only enabled cameras
   are shown; 360° cameras use their raw fisheye view on this page.
+  The numbered URLs `1.html` through `5.html` show the corresponding enabled
+  camera full-screen with the same `free` user gate.
 - **Live status dots** per camera (streaming / standby / disabled).
 - **Enable/disable** a camera without losing its config.
 - **Snapshots**: the 📷 button on a tile saves a JPEG on the server
@@ -292,11 +294,13 @@ touches them.
 - The MediaMTX WebRTC port (TCP 8889 + UDP 8189) is unauthenticated by
   design — firewall it to trusted networks.
 - Create the `free` user only when **every enabled camera may be viewed
-  without authentication**. The public URL is
-  `http://<server>/camview/free.html` (adjust the path for your installation).
-  It exposes live video only, not camera credentials, recordings, snapshots,
-  configuration, or administration. Deleting `free` immediately disables its
-  camera-list API and prevents new mosaic pages from opening it.
+  without authentication**. The public mosaic is
+  `http://<server>/camview/free.html`; `1.html` through `5.html` select the
+  corresponding enabled camera for a full-screen view (adjust the paths for
+  your installation). They expose live video only, not camera credentials,
+  recordings, snapshots, configuration, or administration. Deleting `free`
+  immediately disables the camera-list API and prevents new public pages
+  from opening it.
 - Use HTTPS in front of Apache if logins cross untrusted links.
 
 ## Headless / no-PHP mode
@@ -346,6 +350,8 @@ Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packa
 - `index.html` — viewer grid (login required)
 - `free.html` + `api/free.php` — optional anonymous mosaic, gated by the
   `free` user
+- `1.html`–`5.html` + `camera.js` — full-screen public views of enabled
+  camera positions 1–5
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)
 - `system.html` — system status (admin only): disk/memory/CPU/load/network
