@@ -344,6 +344,8 @@ Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packa
 ## Files
 
 - `index.html` — viewer grid (login required)
+- `free.html` + `api/free.php` — optional anonymous montage, gated by the
+  `free` user
 - `login.html`, `setup.html` — auth and first-run admin creation
 - `admin.html`, `users.html` — camera and user management (admin only)
 - `system.html` — system status (admin only): disk/memory/CPU/load/network

@@ -25,7 +25,20 @@ chrome = subprocess.Popen(
      "--autoplay-policy=no-user-gesture-required", "--window-size=1600,900", "about:blank"],
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 )
-time.sleep(2)
+cdp_ready = False
+for _ in range(40):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/list") as r:
+            json.loads(r.read())
+        cdp_ready = True
+        break
+    except OSError:
+        if chrome.poll() is not None:
+            break
+        time.sleep(0.25)
+if not cdp_ready:
+    chrome.terminate()
+    raise RuntimeError("Chrome remote debugging did not start")
 
 passed = failed = 0
 console_log = []
