@@ -24,6 +24,10 @@ user management and a camera config UI. No build step, no framework.
   fall back to the original fisheye view.
 - **User management** (`users.html`): create users, set roles, reset
   passwords; protects the last admin.
+- **Optional public montage** (`free.html`): creating a user named exactly
+  `free` enables a basic, login-free camera grid with no menus or action
+  buttons. Deleting that user disables it. Only enabled cameras are shown;
+  UniFi 360 dewarping and rotation offsets work here too.
 - **Live status dots** per camera (streaming / standby / disabled).
 - **Enable/disable** a camera without losing its config.
 - **Snapshots**: the 📷 button on a tile saves a JPEG on the server
@@ -287,6 +291,12 @@ touches them.
   the grid use server-side lookups.
 - The MediaMTX WebRTC port (TCP 8889 + UDP 8189) is unauthenticated by
   design — firewall it to trusted networks.
+- Create the `free` user only when **every enabled camera may be viewed
+  without authentication**. The public URL is
+  `http://<server>/camview/free.html` (adjust the path for your installation).
+  It exposes live video only, not camera credentials, recordings, snapshots,
+  configuration, or administration. Deleting `free` immediately disables its
+  camera-list API; already open pages stop on their next status refresh.
 - Use HTTPS in front of Apache if logins cross untrusted links.
 
 ## Headless / no-PHP mode
@@ -323,10 +333,11 @@ a fake AAC test camera, the app under `php -S`) and runs:
 
 - `test_dewarp.py` — synthetic still-image mapping, orientation and raw-master checks.
 - `test_recovery.py` — fake RTSP health, camera targeting, SSH safety and backoff.
-- `test_api.py` — 30 API checks: setup, login, CSRF, validation, CRUD with
-  live MediaMTX apply, probe/snapshot, roles.
-- `test_ui.py` — 13 headless-Chrome checks: first-run flow, login, grid,
-  admin add-camera with live test, disable toggle, logout gating.
+- `test_api.py` — API checks: setup, login, CSRF, validation, CRUD with
+  live MediaMTX apply, probe/snapshot, roles and optional public access.
+- `test_ui.py` — headless-Chrome checks: first-run flow, login, grid,
+  admin add-camera with live test, disable toggle, logout gating and the
+  anonymous montage.
 
 Requires `google-chrome` and the Python `websockets`, `numpy` and `Pillow` packages.
 

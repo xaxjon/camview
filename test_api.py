@@ -49,6 +49,14 @@ def api(path, method="GET", data=None, csrf=None, raw=False):
         try: return e.code, json.loads(payload)
         except json.JSONDecodeError: return e.code, {}
 
+def anon_api(path):
+    req = urllib.request.Request(f"{BASE}/{path}")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
 def mtx_paths():
     with urllib.request.urlopen(f"{MTX}/v3/paths/list") as r:
         return {i["name"]: i["ready"] for i in json.loads(r.read())["items"]}
@@ -250,6 +258,27 @@ print("== users + roles ==")
 s, j = api("users.php", "POST", {"username": "bob", "password": "viewerpass1", "role": "viewer"}, csrf)
 check("create viewer user", s == 200, j)
 api("cameras.php", "POST", cam, csrf)  # re-add for viewer tests
+
+print("== optional public montage ==")
+s, j = anon_api("free.php")
+check("public montage disabled without free user", s == 404, (s, j))
+s, j = api("users.php", "POST", {"username": "free", "password": "freepass1", "role": "viewer"}, csrf)
+check("create free user", s == 200, j)
+s, j = anon_api("free.php")
+check("free user enables anonymous camera list", s == 200 and any(c["name"] == "testcam" for c in j), (s, j))
+check("public camera list excludes credentials and private settings",
+      all(set(c) == {"name", "dewarp", "dewarp_offset", "dewarp_circle", "status"} for c in j), j)
+s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "enabled": False}, csrf)
+s, j = anon_api("free.php")
+check("public montage excludes disabled cameras", s == 200 and all(c["name"] != "testcam" for c in j), j)
+s, j = api("cameras.php", "PUT", {"original": "testcam", **cam, "enabled": True}, csrf)
+s, j = anon_api("cameras.php")
+check("free user does not open normal camera API", s == 401, (s, j))
+s, j = api("users.php", "DELETE", {"username": "free"}, csrf)
+check("delete free user", s == 200, j)
+s, j = anon_api("free.php")
+check("deleting free user disables public montage", s == 404, (s, j))
+
 s, j = api("users.php", "DELETE", {"username": "admin"}, csrf)
 check("cannot delete yourself", s == 400)
 s, j = api("logout.php", "POST")
