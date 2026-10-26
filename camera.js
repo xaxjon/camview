@@ -28,35 +28,92 @@ function watch(name) {
   video.title = name;
   document.body.appendChild(video);
   let pc = null;
+  let sessionUrl = null;
   let retry = null;
+  let disconnectTimer = null;
+  let stopped = false;
+
+  function deleteSession(url, keepalive = false) {
+    if (!url) return;
+    fetch(url, { method: 'DELETE', keepalive }).catch(() => {});
+  }
+
+  function closeCurrent(keepalive = false) {
+    clearTimeout(disconnectTimer);
+    const oldPc = pc;
+    const oldSession = sessionUrl;
+    pc = null;
+    sessionUrl = null;
+    if (oldPc) {
+      oldPc.onconnectionstatechange = null;
+      oldPc.close();
+    }
+    video.srcObject = null;
+    deleteSession(oldSession, keepalive);
+  }
+
+  function scheduleConnect(delay = 3000) {
+    clearTimeout(retry);
+    if (!stopped) retry = setTimeout(connect, delay);
+  }
 
   async function connect() {
+    if (stopped) return;
     clearTimeout(retry);
-    if (pc) pc.close();
-    pc = new RTCPeerConnection();
-    const current = pc;
+    closeCurrent();
+    const current = new RTCPeerConnection();
+    pc = current;
     try {
-      pc.addTransceiver('video', { direction: 'recvonly' });
-      pc.ontrack = e => { video.srcObject = e.streams[0]; };
-      pc.onconnectionstatechange = () => {
-        if (pc === current && ['failed', 'disconnected'].includes(pc.connectionState)) {
-          retry = setTimeout(connect, 3000);
+      current.addTransceiver('video', { direction: 'recvonly' });
+      current.ontrack = e => {
+        if (pc === current) video.srcObject = e.streams[0];
+      };
+      current.onconnectionstatechange = () => {
+        if (pc !== current || stopped) return;
+        if (current.connectionState === 'connected') {
+          clearTimeout(disconnectTimer);
+        } else if (current.connectionState === 'failed') {
+          scheduleConnect();
+        } else if (current.connectionState === 'disconnected') {
+          // ICE disconnections are often transient; do not multiply sessions.
+          clearTimeout(disconnectTimer);
+          disconnectTimer = setTimeout(() => {
+            if (pc === current && current.connectionState === 'disconnected') {
+              scheduleConnect();
+            }
+          }, 10000);
         }
       };
-      await pc.setLocalDescription(await pc.createOffer());
-      await waitForIce(pc);
+      await current.setLocalDescription(await current.createOffer());
+      await waitForIce(current);
       const res = await fetch(`http://${location.hostname}:8889/${encodeURIComponent(name)}/whep`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
-        body: pc.localDescription.sdp,
+        body: current.localDescription.sdp,
       });
       if (!res.ok) throw new Error(`WHEP ${res.status}`);
-      await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+      const locationHeader = res.headers.get('Location');
+      if (!locationHeader) throw new Error('WHEP response missing Location');
+      const newSessionUrl = new URL(locationHeader, res.url).href;
+      if (pc !== current || stopped) {
+        current.close();
+        deleteSession(newSessionUrl);
+        return;
+      }
+      sessionUrl = newSessionUrl;
+      await current.setRemoteDescription({ type: 'answer', sdp: await res.text() });
     } catch {
-      current.close();
-      retry = setTimeout(connect, 3000);
+      if (pc === current) closeCurrent();
+      else current.close();
+      scheduleConnect();
     }
   }
+
+  window.addEventListener('pagehide', () => {
+    stopped = true;
+    clearTimeout(retry);
+    closeCurrent(true);
+  }, { once: true });
   connect();
 }
 
